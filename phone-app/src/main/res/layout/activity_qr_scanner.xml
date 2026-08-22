@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/cameraPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <TextView
+        android:id="@+id/tvScanPrompt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="24dp"
+        android:background="#AA000000"
+        android:padding="16dp"
+        android:text="Наведите камеру на QR-код экрана смарт-часов Huawei Watch 4 Pro"
+        android:textAlignment="center"
+        android:textColor="@color/text_primary"
+        android:textSize="16sp" />
+
+</FrameLayout>

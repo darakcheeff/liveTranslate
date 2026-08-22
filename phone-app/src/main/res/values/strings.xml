@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Gemini Live Translate</string>
+    <string name="solo_mode_btn">🎧 Односторонний (Шепот)</string>
+    <string name="dialogue_mode_btn">🗣 Двусторонний (Диалог)</string>
+    <string name="stop_btn">⏹ СТОП</string>
+    <string name="status_idle">Готов к переводу</string>
+    <string name="status_connecting">Подключение к Gemini Live...</string>
+    <string name="status_connected">Сессия активна</string>
+    <string name="status_rotating_key">Смена API ключа...</string>
+    <string name="settings_title">Настройки</string>
+    <string name="history_title">История переводов</string>
+    <string name="scan_qr_title">Сканирование QR часов</string>
+    <string name="save_btn">Сохранить</string>
+    <string name="export_btn">Экспорт в файл</string>
+    <string name="sync_watch_btn">Связать с часами по QR</string>
+</resources>

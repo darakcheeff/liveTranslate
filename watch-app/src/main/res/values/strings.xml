@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Gemini Watch</string>
+    <string name="solo_mode_watch">🎧 Шепот</string>
+    <string name="dialogue_mode_watch">🗣 Диалог</string>
+    <string name="stop_btn">⏹ СТОП</string>
+    <string name="pair_btn">QR Привязка</string>
+</resources>

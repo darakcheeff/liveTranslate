@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="466px"
+    android:layout_height="466px"
+    android:background="#000000"
+    android:padding="24dp">
+
+    <!-- Top Status Info (Battery/Connection/Audio route) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tvWatchStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Online"
+            android:textColor="#34A853"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tvAudioRoute"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="🎧 Наушники"
+            android:textColor="#AAAAAA"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Center Control Panel: Mode selection or Stop -->
+    <LinearLayout
+        android:id="@+id/panelWatchIdle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center">
+
+        <Button
+            android:id="@+id/btnWatchSolo"
+            android:layout_width="260px"
+            android:layout_height="80px"
+            android:text="🎧 Шепот"
+            android:textSize="13sp"
+            android:backgroundTint="#1A73E8" />
+
+        <Button
+            android:id="@+id/btnWatchDialogue"
+            android:layout_width="260px"
+            android:layout_height="80px"
+            android:layout_marginTop="8dp"
+            android:text="🗣 Диалог"
+            android:textSize="13sp"
+            android:backgroundTint="#4285F4" />
+
+        <Button
+            android:id="@+id/btnWatchPair"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="QR Привязка"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="#AAAAAA"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- Active State: Big Stop Button and Subtitles -->
+    <LinearLayout
+        android:id="@+id/panelWatchActive"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvWatchSubtitles"
+            android:layout_width="320px"
+            android:layout_height="60px"
+            android:text="Слушаю..."
+            android:gravity="center"
+            android:maxLines="2"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnWatchStop"
+            android:layout_width="240px"
+            android:layout_height="120px"
+            android:layout_marginTop="8dp"
+            android:text="⏹ СТОП"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:backgroundTint="#EA4335" />
+    </LinearLayout>
+
+</FrameLayout>

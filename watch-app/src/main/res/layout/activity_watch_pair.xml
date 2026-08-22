@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="466px"
+    android:layout_height="466px"
+    android:background="#000000"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Отсканируйте с телефона"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp" />
+
+    <ImageView
+        android:id="@+id/ivQrCode"
+        android:layout_width="240px"
+        android:layout_height="240px"
+        android:layout_marginTop="8dp"
+        android:background="#FFFFFF"
+        android:padding="4dp" />
+
+    <TextView
+        android:id="@+id/tvPairStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Ожидание Bluetooth..."
+        android:textColor="#AAAAAA"
+        android:textSize="11sp" />
+
+</LinearLayout>

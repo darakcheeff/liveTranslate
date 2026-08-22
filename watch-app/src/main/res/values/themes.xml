@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.GeminiWatch" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="colorPrimary">#1A73E8</item>
+    </style>
+</resources>

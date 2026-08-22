@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background"
+    android:padding="20dp">
+
+    <!-- Top Bar with Language Pair & Actions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/tvLanguagePair"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Русский ↔ English"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnHistory"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="История"
+            style="@style/Widget.MaterialComponents.Button.TextButton" />
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚙"
+            style="@style/Widget.MaterialComponents.Button.TextButton" />
+    </LinearLayout>
+
+    <!-- Status Banner -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@color/surface"
+        android:padding="10dp"
+        android:gravity="center"
+        android:text="@string/status_idle"
+        android:textColor="@color/status_green"
+        android:textSize="14sp" />
+
+    <!-- Waveform Visualizer & Subtitles Box -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="16dp"
+        android:background="@color/surface"
+        android:padding="12dp">
+
+        <com.livetranslate.phone.ui.WaveformVisualizerView
+            android:id="@+id/waveformVisualizer"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:layout_gravity="center" />
+
+        <ScrollView
+            android:id="@+id/scrollSubtitles"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <TextView
+                android:id="@+id/tvSubtitles"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:lineSpacingExtra="4dp" />
+        </ScrollView>
+    </FrameLayout>
+
+    <!-- Action Buttons Panel -->
+    <LinearLayout
+        android:id="@+id/panelIdleButtons"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="16dp">
+
+        <Button
+            android:id="@+id/btnSoloMode"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:text="@string/solo_mode_btn"
+            android:textSize="16sp"
+            android:textAllCaps="false"
+            android:backgroundTint="@color/primary" />
+
+        <Button
+            android:id="@+id/btnDialogueMode"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginTop="12dp"
+            android:text="@string/dialogue_mode_btn"
+            android:textSize="16sp"
+            android:textAllCaps="false"
+            android:backgroundTint="@color/accent" />
+    </LinearLayout>
+
+    <!-- Stop Button (Visible during active session) -->
+    <Button
+        android:id="@+id/btnStop"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_marginTop="16dp"
+        android:text="@string/stop_btn"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        android:backgroundTint="@color/stop_red" />
+
+</LinearLayout>
