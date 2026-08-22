@@ -56,8 +56,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun loadCurrentSettings() {
         val config = prefs.loadConfig()
-        binding.etApiKeys.setText(config.apiKeys.joinToString("
-"))
+        binding.etApiKeys.setText(config.apiKeys.joinToString("\n"))
 
         val ourIdx = Language.SUPPORTED_LANGUAGES.indexOfFirst { it.code == config.ourLanguage }.coerceAtLeast(0)
         binding.spinnerOurLanguage.setSelection(ourIdx)
@@ -83,9 +82,9 @@ class SettingsActivity : AppCompatActivity() {
             Toast.makeText(this@SettingsActivity, "Проверка ключа...", Toast.LENGTH_SHORT).show()
             val result = modelDiscovery.fetchLiveCapableModels(keys.first())
             result.onSuccess { models ->
-                Toast.makeText(this@SettingsActivity, "Доступные модели: ${models.joinToString(", ")}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@SettingsActivity, "Доступные модели: " + models.joinToString(", "), Toast.LENGTH_LONG).show()
             }.onFailure { err ->
-                Toast.makeText(this@SettingsActivity, "Ошибка проверки: ${err.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@SettingsActivity, "Ошибка проверки: " + err.message, Toast.LENGTH_LONG).show()
             }
         }
     }

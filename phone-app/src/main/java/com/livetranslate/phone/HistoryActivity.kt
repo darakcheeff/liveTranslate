@@ -9,7 +9,8 @@ import com.livetranslate.core.security.EncryptedPreferencesManager
 import com.livetranslate.phone.databinding.ActivityHistoryBinding
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
 class HistoryActivity : AppCompatActivity() {
 
@@ -46,11 +47,9 @@ class HistoryActivity : AppCompatActivity() {
         val builder = StringBuilder()
         items.forEach { item ->
             val dateStr = sdf.format(Date(item.timestamp))
-            builder.append("[$dateStr] (${item.sourceLang} ➔ ${item.targetLang})
-")
-            builder.append("• ${item.translatedText}
-
-")
+            builder.append("[").append(dateStr).append("] (")
+                .append(item.sourceLang).append(" -> ").append(item.targetLang).append(")\n")
+            builder.append("• ").append(item.translatedText).append("\n\n")
         }
         binding.tvHistoryContent.text = builder.toString()
     }
@@ -63,7 +62,7 @@ class HistoryActivity : AppCompatActivity() {
         }
 
         val text = binding.tvHistoryContent.text.toString()
-        val file = File(cacheDir, "gemini_translations_export_${System.currentTimeMillis()}.txt")
+        val file = File(cacheDir, "gemini_translations_export_" + System.currentTimeMillis() + ".txt")
         file.writeText(text)
 
         val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.provider", file)
