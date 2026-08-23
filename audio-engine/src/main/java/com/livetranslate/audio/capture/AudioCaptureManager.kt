@@ -210,7 +210,7 @@ class AudioCaptureManager(
                                 totalSpeechChunksSent++
 
                                 // Safety cutoff for long monologues: wait for micro-pause/breath before cutting
-                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS && (isSilenceDetected || rms < currentSpeechThreshold)) {
+                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS && (isSilenceDetected || rms < speechThreshold)) {
                                     val completedPcm = currentPhraseStream.toByteArray()
                                     if (completedPcm.isNotEmpty()) {
                                         Log.i(TAG, "VAD (SOLO): Safe breath-pause chunk complete (${completedPcm.size} bytes). Enqueueing.")
