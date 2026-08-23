@@ -216,7 +216,10 @@ class AudioCaptureManager(
                                         Log.i(TAG, "VAD (SOLO): Safe breath-pause chunk complete (${completedPcm.size} bytes). Enqueueing.")
                                         _completedPhraseFlow.emit(completedPcm)
                                         currentPhraseStream.reset()
+                                        preSpeechRingBuffer.clear()
                                         totalSpeechChunksSent = 0
+                                        consecutiveSpeechChunks = 0
+                                        consecutiveSilenceChunks = 0
                                     }
                                 }
                             }
