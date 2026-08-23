@@ -29,7 +29,7 @@ class AudioCaptureManager(
         const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono
         const val VAD_SPEECH_RMS_THRESHOLD = 30.0
         const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm real speech
-        const val TRAILING_SILENCE_CHUNKS = 4 // 400 ms of trailing silence before ending turn
+        const val TRAILING_SILENCE_CHUNKS = 8 // 800 ms of trailing silence to let Gemini server VAD trigger turn
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -44,8 +44,6 @@ class AudioCaptureManager(
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
     private var pcmFileOutputStream: FileOutputStream? = null
-
-    var onSpeechEnded: (() -> Unit)? = null
 
     fun setDucking(enabled: Boolean) {
         isDucking.set(enabled)
@@ -102,6 +100,7 @@ class AudioCaptureManager(
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
+                val silenceBuffer = ByteArray(CHUNK_SIZE_BYTES)
                 var consecutiveSpeechChunks = 0
                 var consecutiveSilenceChunks = 0
                 var isInConfirmedSpeech = false
@@ -154,9 +153,11 @@ class AudioCaptureManager(
                                     _audioChunkFlow.emit(currentChunk)
                                     totalSpeechChunksSent++
                                 } else {
+                                    // Emit 2 explicit zeroed silence buffers to cleanly trigger Gemini server VAD
+                                    _audioChunkFlow.emit(silenceBuffer)
+                                    _audioChunkFlow.emit(silenceBuffer)
                                     isInConfirmedSpeech = false
-                                    Log.d(TAG, "VAD: Speech completed after $totalSpeechChunksSent chunks. Triggering turnComplete.")
-                                    onSpeechEnded?.invoke()
+                                    Log.d(TAG, "VAD: Speech completed after $totalSpeechChunksSent chunks. Emitted trailing silence to trigger Gemini translation.")
                                 }
                             } else {
                                 if (preSpeechRingBuffer.size >= 2) preSpeechRingBuffer.removeFirst()
