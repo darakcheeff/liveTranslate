@@ -194,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     is ConnectionState.Connecting -> {
                         binding.tvStatus.text = "Подключение... (${state.model})"
-                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.warning_yellow))
                         setSessionActiveUI(true)
                     }
                     is ConnectionState.Connected -> {
@@ -204,15 +204,15 @@ class MainActivity : AppCompatActivity() {
                     }
                     is ConnectionState.RotatingKey -> {
                         binding.tvStatus.text = "Ротация ключа #${state.newKeyIndex + 1}"
-                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.warning_yellow))
                     }
                     is ConnectionState.FallbackModel -> {
                         binding.tvStatus.text = "Каскад на модель: ${state.toModel}"
-                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.warning_yellow))
                     }
                     is ConnectionState.Error -> {
                         binding.tvStatus.text = state.message
-                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.stop_red))
                     }
                     is ConnectionState.Disconnected -> {
                         binding.tvStatus.setText(R.string.status_idle)
@@ -234,7 +234,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             service.waveformRmsFlow.collect { rms ->
-                binding.waveformVisualizer.addAmplitude(rms)
+                binding.waveformVisualizer.updateRms(rms)
             }
         }
     }
