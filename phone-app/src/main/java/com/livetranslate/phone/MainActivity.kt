@@ -109,6 +109,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnDialogueMode.setOnClickListener { startTranslation(TranslationMode.DIALOGUE) }
         binding.btnStop.setOnClickListener { stopTranslation() }
 
+        binding.btnSwapLanguages.setOnClickListener {
+            swapLanguages()
+        }
+
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
@@ -118,43 +122,63 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun swapLanguages() {
+        val config = prefs.loadConfig()
+        val newConfig = config.copy(
+            ourLanguage = config.opponentLanguage,
+            opponentLanguage = config.ourLanguage
+        )
+        prefs.saveConfig(newConfig)
+        updateHeaderInfo()
+        translationService?.updateConfig(newConfig)
+
+        val ourName = Language.findByCode(newConfig.ourLanguage).name
+        val oppName = Language.findByCode(newConfig.opponentLanguage).name
+        Toast.makeText(this, "$ourName ⇄ $oppName", Toast.LENGTH_SHORT).show()
+    }
+
     private fun updateHeaderInfo() {
         val config = prefs.loadConfig()
-        val our = Language.findByCode(config.ourLanguage).name
-        val opp = Language.findByCode(config.opponentLanguage).name
-        binding.tvLanguagePair.text = "$our ↔ $opp"
+        val ourLang = Language.findByCode(config.ourLanguage).name
+        val opponentLang = Language.findByCode(config.opponentLanguage).name
+        binding.tvOurLanguage.text = ourLang
+        binding.tvOpponentLanguage.text = opponentLang
     }
 
     private fun startTranslation(mode: TranslationMode) {
         val config = prefs.loadConfig()
         if (config.apiKeys.isEmpty()) {
-            Toast.makeText(this, "Сначала добавьте API-ключи в Настройках", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Пожалуйста, добавьте API ключ Gemini в Настройках", Toast.LENGTH_LONG).show()
             startActivity(Intent(this, SettingsActivity::class.java))
             return
         }
-
-        binding.panelIdleButtons.visibility = View.GONE
-        binding.btnStop.visibility = View.VISIBLE
-        binding.tvSubtitles.text = ""
 
         val intent = Intent(this, LiveTranslationService::class.java).apply {
             action = LiveTranslationService.ACTION_START
             putExtra(LiveTranslationService.EXTRA_MODE, mode.name)
         }
-        ContextCompat.startForegroundService(this, intent)
-        translationService?.startTranslation(mode)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        setSessionActiveUI(true)
     }
 
     private fun stopTranslation() {
         val intent = Intent(this, LiveTranslationService::class.java).apply {
             action = LiveTranslationService.ACTION_STOP
         }
-        ContextCompat.startForegroundService(this, intent)
-        translationService?.stopTranslation()
+        startService(intent)
+        setSessionActiveUI(false)
+        binding.tvStatus.setText(R.string.status_idle)
+        binding.tvStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+        binding.tvSubtitles.text = ""
+    }
 
-        binding.panelIdleButtons.visibility = View.VISIBLE
-        binding.btnStop.visibility = View.GONE
-        binding.tvStatus.text = getString(R.string.status_idle)
+    private fun setSessionActiveUI(isActive: Boolean) {
+        binding.panelIdleButtons.visibility = if (isActive) View.GONE else View.VISIBLE
+        binding.btnStop.visibility = if (isActive) View.VISIBLE else View.GONE
     }
 
     private fun observeService() {
@@ -163,26 +187,46 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             service.connectionState.collect { state ->
                 when (state) {
-                    is ConnectionState.Idle -> binding.tvStatus.text = "Готов к переводу"
-                    is ConnectionState.Connecting -> binding.tvStatus.text = "Подключение (${state.model})..."
-                    is ConnectionState.Connected -> binding.tvStatus.text = "Перевод активен (${state.model})"
-                    is ConnectionState.RotatingKey -> binding.tvStatus.text = "Ротация ключа #${state.newKeyIndex + 1}"
-                    is ConnectionState.FallbackModel -> binding.tvStatus.text = "Каскад на модель ${state.toModel}"
-                    is ConnectionState.Error -> binding.tvStatus.text = "Ошибка: ${state.message}"
+                    is ConnectionState.Idle -> {
+                        binding.tvStatus.setText(R.string.status_idle)
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                        setSessionActiveUI(false)
+                    }
+                    is ConnectionState.Connecting -> {
+                        binding.tvStatus.text = "Подключение... (${state.model})"
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                        setSessionActiveUI(true)
+                    }
+                    is ConnectionState.Connected -> {
+                        binding.tvStatus.setText(R.string.status_connected)
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                        setSessionActiveUI(true)
+                    }
+                    is ConnectionState.RotatingKey -> {
+                        binding.tvStatus.text = "Ротация ключа #${state.newKeyIndex + 1}"
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                    }
+                    is ConnectionState.FallbackModel -> {
+                        binding.tvStatus.text = "Каскад на модель: ${state.toModel}"
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_orange))
+                    }
+                    is ConnectionState.Error -> {
+                        binding.tvStatus.text = state.message
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
+                    }
                     is ConnectionState.Disconnected -> {
-                        binding.panelIdleButtons.visibility = View.VISIBLE
-                        binding.btnStop.visibility = View.GONE
-                        binding.tvStatus.text = getString(R.string.status_idle)
+                        binding.tvStatus.setText(R.string.status_idle)
+                        binding.tvStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                        setSessionActiveUI(false)
                     }
                 }
             }
         }
 
         lifecycleScope.launch {
-            service.subtitleFlow.collect { text ->
-                val config = prefs.loadConfig()
-                if (config.showSubtitles) {
-                    binding.tvSubtitles.append("$text ")
+            service.subtitleFlow.collect { subtitle ->
+                binding.tvSubtitles.text = subtitle
+                binding.scrollSubtitles.post {
                     binding.scrollSubtitles.fullScroll(View.FOCUS_DOWN)
                 }
             }
@@ -190,7 +234,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             service.waveformRmsFlow.collect { rms ->
-                binding.waveformVisualizer.updateRms(rms)
+                binding.waveformVisualizer.addAmplitude(rms)
             }
         }
     }

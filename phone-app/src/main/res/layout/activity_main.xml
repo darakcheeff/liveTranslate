@@ -6,22 +6,50 @@
     android:background="@color/background"
     android:padding="20dp">
 
-    <!-- Top Bar with Language Pair & Actions -->
+    <!-- Top Bar with Interactive Language Pair & Actions -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
-        <TextView
-            android:id="@+id/tvLanguagePair"
+        <LinearLayout
+            android:id="@+id/panelLanguages"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Русский ↔ English"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvOurLanguage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Русский"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/btnSwapLanguages"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_swap"
+                android:tint="@color/primary"
+                android:contentDescription="Поменять языки местами" />
+
+            <TextView
+                android:id="@+id/tvOpponentLanguage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="English"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/btnHistory"

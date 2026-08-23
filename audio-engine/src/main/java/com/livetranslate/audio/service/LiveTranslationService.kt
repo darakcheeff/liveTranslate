@@ -1,24 +1,21 @@
 package com.livetranslate.audio.service
 
 import android.annotation.SuppressLint
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
+import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.livetranslate.audio.capture.AudioCaptureManager
 import com.livetranslate.audio.focus.AudioFocusManager
 import com.livetranslate.audio.playback.AudioPlaybackManager
 import com.livetranslate.core.model.ConnectionState
-import com.livetranslate.core.model.HistoryItem
+import com.livetranslate.core.model.GeminiConfig
 import com.livetranslate.core.model.TranslationMode
 import com.livetranslate.core.security.EncryptedPreferencesManager
 import com.livetranslate.gemini.client.GeminiLiveWebSocketClient
@@ -26,9 +23,6 @@ import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.io.File
-import java.io.FileInputStream
-import java.util.UUID
 
 class LiveTranslationService : Service() {
 
@@ -39,7 +33,7 @@ class LiveTranslationService : Service() {
         const val ACTION_INJECT_TEST = "com.livetranslate.action.INJECT_TEST"
         const val EXTRA_MODE = "extra_mode"
         private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "live_translate_service_channel"
+        private const val CHANNEL_ID = "live_translation_channel"
     }
 
     private val binder = LocalBinder()
@@ -82,8 +76,6 @@ class LiveTranslationService : Service() {
             audioCapture.setDucking(isPlaying)
         }
 
-
-
         observeStreams()
         acquireLocks()
     }
@@ -110,6 +102,10 @@ class LiveTranslationService : Service() {
     val subtitleFlow: SharedFlow<String> get() = webSocketClient.subtitleFlow
     val waveformRmsFlow: SharedFlow<Float> get() = audioCapture.waveformRmsFlow
 
+    fun updateConfig(config: GeminiConfig) {
+        webSocketClient.updateConfig(config)
+    }
+
     fun startTranslation(mode: TranslationMode) {
         activeMode = mode
         val config = prefsManager.loadConfig()
@@ -119,51 +115,22 @@ class LiveTranslationService : Service() {
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
         audioPlayback.initialize(mode)
-        audioCapture.startCapture()
+        audioCapture.startCapture(mode)
 
-        // Discover supported models dynamically for the active API key
         serviceScope.launch {
             val activeKey = config.getActiveApiKey()
             if (!activeKey.isNullOrBlank()) {
                 val discoveryResult = modelDiscovery.fetchLiveCapableModels(activeKey)
                 discoveryResult.onSuccess { models ->
                     Log.i(TAG, "Updating config with discovered models: $models")
-                    val updatedConfig = prefsManager.loadConfig().copy(preferredModels = models)
+                    val updatedConfig = config.copy(preferredModels = models)
                     prefsManager.saveConfig(updatedConfig)
                     webSocketClient.updateConfig(updatedConfig)
                 }
             }
-            webSocketClient.startSession(mode)
         }
-    }
 
-    fun runPcmInjectionTest() {
-        Log.i(TAG, "Starting Automated PCM Injection Test on Phone...")
-        startTranslation(TranslationMode.DIALOGUE)
-
-        serviceScope.launch(Dispatchers.IO) {
-            delay(1500) // Wait for WebSocket handshake
-            var pcmFile = File(cacheDir, "last_recorded_audio.pcm")
-            if (!pcmFile.exists() || pcmFile.length() == 0L) {
-                pcmFile = File("/data/local/tmp/user_speech.pcm")
-            }
-
-            if (pcmFile.exists() && pcmFile.length() > 0L) {
-                Log.i(TAG, "Injecting PCM file: ${pcmFile.absolutePath} (${pcmFile.length()} bytes)")
-                val bytes = pcmFile.readBytes()
-                val chunkSize = 3200
-                for (i in 0 until bytes.size step chunkSize) {
-                    val end = minOf(i + chunkSize, bytes.size)
-                    val chunk = bytes.copyOfRange(i, end)
-                    webSocketClient.sendAudioChunk(chunk)
-                    delay(80)
-                }
-                
-                Log.i(TAG, "Finished injecting PCM speech. Sent turnComplete. Waiting for Gemini audio translation...")
-            } else {
-                Log.e(TAG, "No PCM audio file found for injection test!")
-            }
-        }
+        webSocketClient.startSession(mode)
     }
 
     fun stopTranslation() {
@@ -182,7 +149,7 @@ class LiveTranslationService : Service() {
     }
 
     private fun resumeTranslation() {
-        audioCapture.startCapture()
+        audioCapture.startCapture(activeMode)
     }
 
     private fun observeStreams() {
@@ -208,69 +175,92 @@ class LiveTranslationService : Service() {
             webSocketClient.subtitleFlow.collect { text ->
                 val config = prefsManager.loadConfig()
                 if (config.saveHistory && text.isNotBlank()) {
-                    val item = HistoryItem(
-                        id = UUID.randomUUID().toString(),
-                        timestamp = System.currentTimeMillis(),
+                    prefsManager.addHistoryItem(
                         mode = activeMode,
-                        sourceLang = config.opponentLanguage,
-                        targetLang = config.ourLanguage,
-                        originalText = "[Оппонент]",
+                        sourceLang = config.ourLanguage,
+                        targetLang = config.opponentLanguage,
+                        originalText = "",
                         translatedText = text
                     )
-                    prefsManager.appendHistoryItem(item)
                 }
             }
+        }
+    }
+
+    private fun runPcmInjectionTest() {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val pcmFile = File(cacheDir, "last_recorded_audio.pcm")
+                if (!pcmFile.exists()) {
+                    Log.w(TAG, "No test PCM file found in cache")
+                    return@launch
+                }
+                val bytes = pcmFile.readBytes()
+                Log.i(TAG, "Injecting test PCM: ${bytes.size} bytes")
+                val chunkSize = 3200
+                for (i in 0 until bytes.size step chunkSize) {
+                    val end = minOf(i + chunkSize, bytes.size)
+                    val chunk = bytes.copyOfRange(i, end)
+                    webSocketClient.sendAudioChunk(chunk)
+                    delay(80)
+                }
+                val silence = ByteArray(3200)
+                repeat(5) {
+                    webSocketClient.sendAudioChunk(silence)
+                    delay(80)
+                }
+                Log.i(TAG, "Test PCM injection complete")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error injecting test PCM", e)
+            }
+        }
+    }
+
+    private fun startForegroundNotification(mode: TranslationMode) {
+        createNotificationChannel()
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Live Translate: ${mode.displayName}")
+            .setContentText("Идет синхронный перевод...")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Синхронный перевод",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
         }
     }
 
     @SuppressLint("WakelockTimeout")
     private fun acquireLocks() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveTranslate:WakeLock").apply {
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveTranslate::WakeLock").apply {
             acquire()
         }
-
-        val wifiManager = getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LiveTranslate:WifiLock").apply {
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LiveTranslate::WifiLock").apply {
             acquire()
         }
     }
 
     private fun releaseLocks() {
-        try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-            if (wifiLock?.isHeld == true) wifiLock?.release()
-        } catch (e: Exception) {
-            // Ignore
-        }
-    }
-
-    private fun startForegroundNotification(mode: TranslationMode) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Gemini Live Перевод",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        notificationManager.createNotificationChannel(channel)
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Синхронный перевод активен")
-            .setContentText("Режим: " + mode.displayName)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setOngoing(true)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wifiLock?.let { if (it.isHeld) it.release() }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.i(TAG, "Service onDestroy")
+        stopTranslation()
         releaseLocks()
         serviceScope.cancel()
     }

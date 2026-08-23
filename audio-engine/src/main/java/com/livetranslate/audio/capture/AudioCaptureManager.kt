@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.util.Log
+import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -30,6 +31,7 @@ class AudioCaptureManager(
         const val VAD_SPEECH_RMS_THRESHOLD = 30.0
         const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm speech
         const val TRAILING_SILENCE_CHUNKS = 5 // 500 ms of trailing silence to trigger Gemini VAD
+        const val SOLO_MAX_SEGMENT_CHUNKS = 60 // 6.0 seconds max chunk in SOLO mode for continuous lecture streaming
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -43,15 +45,21 @@ class AudioCaptureManager(
     private var noiseSuppressor: NoiseSuppressor? = null
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
+    private var currentMode = TranslationMode.DIALOGUE
     private var pcmFileOutputStream: FileOutputStream? = null
 
     fun setDucking(enabled: Boolean) {
-        isDucking.set(enabled)
+        if (currentMode == TranslationMode.DIALOGUE) {
+            isDucking.set(enabled)
+        } else {
+            isDucking.set(false) // In SOLO mode, do not duck microphone so streaming lecture audio is continuous
+        }
     }
 
     @SuppressLint("MissingPermission")
-    fun startCapture(): Boolean {
+    fun startCapture(mode: TranslationMode = TranslationMode.DIALOGUE): Boolean {
         if (isRecording.get()) return true
+        this.currentMode = mode
 
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
         val bufferSize = maxOf(minBufferSize, CHUNK_SIZE_BYTES * 4)
@@ -96,7 +104,7 @@ class AudioCaptureManager(
 
             record.startRecording()
             isRecording.set(true)
-            Log.i(TAG, "AudioRecord capture started successfully")
+            Log.i(TAG, "AudioRecord capture started successfully in mode: ${mode.name}")
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
@@ -135,7 +143,6 @@ class AudioCaptureManager(
                                     isInConfirmedSpeech = true
                                     totalSpeechChunksSent = 0
                                     Log.d(TAG, "VAD: Confirmed speech started (RMS: $rms)")
-                                    // Flush 500ms pre-speech baseline frames to calibrate Gemini noise floor
                                     while (preSpeechRingBuffer.isNotEmpty()) {
                                         _audioChunkFlow.emit(preSpeechRingBuffer.removeFirst())
                                         totalSpeechChunksSent++
@@ -144,6 +151,14 @@ class AudioCaptureManager(
                             } else {
                                 _audioChunkFlow.emit(currentChunk)
                                 totalSpeechChunksSent++
+
+                                // In SOLO mode: auto-segment continuous speech every 6 seconds so user hears continuous stream
+                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
+                                    _audioChunkFlow.emit(silenceBuffer)
+                                    _audioChunkFlow.emit(silenceBuffer)
+                                    isInConfirmedSpeech = false
+                                    Log.d(TAG, "VAD (SOLO): Completed 6s segment. Triggered continuous stream translation.")
+                                }
                             }
                         } else {
                             consecutiveSpeechChunks = 0
@@ -153,7 +168,6 @@ class AudioCaptureManager(
                                     _audioChunkFlow.emit(currentChunk)
                                     totalSpeechChunksSent++
                                 } else {
-                                    // Emit 2 explicit zeroed silence buffers to cleanly trigger Gemini server VAD
                                     _audioChunkFlow.emit(silenceBuffer)
                                     _audioChunkFlow.emit(silenceBuffer)
                                     isInConfirmedSpeech = false
