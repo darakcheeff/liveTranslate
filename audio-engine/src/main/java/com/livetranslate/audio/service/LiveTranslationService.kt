@@ -82,9 +82,7 @@ class LiveTranslationService : Service() {
             audioCapture.setDucking(isPlaying)
         }
 
-        audioCapture.onSpeechEnded = {
-            webSocketClient.sendTurnComplete()
-        }
+
 
         observeStreams()
         acquireLocks()
@@ -160,7 +158,7 @@ class LiveTranslationService : Service() {
                     webSocketClient.sendAudioChunk(chunk)
                     delay(80)
                 }
-                webSocketClient.sendTurnComplete()
+                
                 Log.i(TAG, "Finished injecting PCM speech. Sent turnComplete. Waiting for Gemini audio translation...")
             } else {
                 Log.e(TAG, "No PCM audio file found for injection test!")
