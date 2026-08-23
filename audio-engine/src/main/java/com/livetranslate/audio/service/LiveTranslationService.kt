@@ -20,8 +20,10 @@ import com.livetranslate.gemini.client.GeminiLiveWebSocketClient
 import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -46,12 +48,18 @@ class LiveTranslationService : Service() {
     private lateinit var audioCapture: AudioCaptureManager
     private lateinit var audioPlayback: AudioPlaybackManager
     private lateinit var audioFocus: AudioFocusManager
-    private lateinit var webSocketClient: GeminiLiveWebSocketClient
+
+    // Twin WebSocket clients for continuous zero-gap SOLO conveyor translation
+    private lateinit var clientA: GeminiLiveWebSocketClient
+    private lateinit var clientB: GeminiLiveWebSocketClient
     private lateinit var modelDiscovery: GeminiModelDiscovery
 
     private var activeMode = TranslationMode.DIALOGUE
     private var currentSessionId: String? = null
     private var currentSessionTranscript = StringBuilder()
+
+    private val _compositeSubtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val subtitleFlow: SharedFlow<String> = _compositeSubtitleFlow.asSharedFlow()
 
     inner class LocalBinder : Binder() {
         val service: LiveTranslationService get() = this@LiveTranslationService
@@ -59,7 +67,7 @@ class LiveTranslationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Service onCreate")
+        Log.i(TAG, "Service onCreate (Twin-Engine Pipelined)")
         prefsManager = EncryptedPreferencesManager(this)
         audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager(this)
@@ -69,7 +77,8 @@ class LiveTranslationService : Service() {
             onFocusGained = { resumeTranslation() }
         )
         val initialConfig = prefsManager.loadConfig()
-        webSocketClient = GeminiLiveWebSocketClient(initialConfig)
+        clientA = GeminiLiveWebSocketClient(initialConfig)
+        clientB = GeminiLiveWebSocketClient(initialConfig)
         modelDiscovery = GeminiModelDiscovery()
 
         audioPlayback.onPlaybackActiveChanged = { isPlaying ->
@@ -100,19 +109,20 @@ class LiveTranslationService : Service() {
         return START_NOT_STICKY
     }
 
-    val connectionState: StateFlow<ConnectionState> get() = webSocketClient.connectionState
-    val subtitleFlow: SharedFlow<String> get() = webSocketClient.subtitleFlow
+    val connectionState: StateFlow<ConnectionState> get() = clientA.connectionState
     val waveformRmsFlow: SharedFlow<Float> get() = audioCapture.waveformRmsFlow
 
     fun updateConfig(config: GeminiConfig) {
-        webSocketClient.updateConfig(config)
+        clientA.updateConfig(config)
+        clientB.updateConfig(config)
     }
 
     fun startTranslation(mode: TranslationMode) {
         activeMode = mode
         val config = prefsManager.loadConfig()
-        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name}")
-        webSocketClient.updateConfig(config)
+        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name} (Twin Engine)")
+        clientA.updateConfig(config)
+        clientB.updateConfig(config)
 
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
@@ -150,17 +160,22 @@ class LiveTranslationService : Service() {
                     Log.i(TAG, "Updating config with discovered models: $models")
                     val updatedConfig = config.copy(preferredModels = models)
                     prefsManager.saveConfig(updatedConfig)
-                    webSocketClient.updateConfig(updatedConfig)
+                    clientA.updateConfig(updatedConfig)
+                    clientB.updateConfig(updatedConfig)
                 }
             }
         }
 
-        webSocketClient.startSession(mode)
+        clientA.startSession(mode)
+        if (mode == TranslationMode.SOLO) {
+            clientB.startSession(mode)
+        }
     }
 
     fun stopTranslation() {
         Log.i(TAG, "stopTranslation called")
-        webSocketClient.stopSession()
+        clientA.stopSession()
+        clientB.stopSession()
         audioCapture.stopCapture()
         audioPlayback.release()
         audioFocus.abandonAudioFocus()
@@ -177,80 +192,120 @@ class LiveTranslationService : Service() {
         audioCapture.startCapture(activeMode)
     }
 
-    private val soloPhraseChannel = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+    private val channelA = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+    private val channelB = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+    private var phraseCounter = 0
 
     private fun observeStreams() {
+        // Direct DIALOGUE mode streaming
         serviceScope.launch {
             audioCapture.audioChunkFlow.collect { pcmChunk ->
                 if (activeMode == TranslationMode.DIALOGUE) {
-                    webSocketClient.sendAudioChunk(pcmChunk)
+                    clientA.sendAudioChunk(pcmChunk)
                 }
             }
         }
 
+        // Conveyor phrase dispatcher for SOLO mode (alternates between Channel A and Channel B)
         serviceScope.launch {
             audioCapture.completedPhraseFlow.collect { phrasePcm ->
                 if (activeMode == TranslationMode.SOLO) {
-                    soloPhraseChannel.trySend(phrasePcm)
+                    val index = phraseCounter++
+                    if (index % 2 == 0) {
+                        Log.i(TAG, "Dispatcher: Dispatching Phrase #$index (${phrasePcm.size} bytes) -> Channel A")
+                        channelA.trySend(phrasePcm)
+                    } else {
+                        Log.i(TAG, "Dispatcher: Dispatching Phrase #$index (${phrasePcm.size} bytes) -> Channel B")
+                        channelB.trySend(phrasePcm)
+                    }
                 }
             }
         }
 
-        // Dedicated translation conveyor worker for SOLO mode
+        // Twin Worker A
         serviceScope.launch(Dispatchers.IO) {
-            for (phrasePcm in soloPhraseChannel) {
+            for (phrasePcm in channelA) {
                 if (activeMode != TranslationMode.SOLO) continue
-
-                Log.i(TAG, "Conveyor: Processing phrase (${phrasePcm.size} bytes) -> sending to Gemini")
-                webSocketClient.sendActivityStart()
-
-                val chunkSize = 3200
-                var offset = 0
-                while (offset < phrasePcm.size) {
-                    val len = minOf(chunkSize, phrasePcm.size - offset)
-                    val chunk = phrasePcm.copyOfRange(offset, offset + len)
-                    webSocketClient.sendAudioChunk(chunk)
-                    offset += len
-                    delay(2)
-                }
-
-                webSocketClient.sendActivityEnd()
-
-                Log.d(TAG, "Conveyor: Awaiting Gemini turn completion...")
-                webSocketClient.waitForTurnComplete(timeoutMs = 20000)
-                Log.i(TAG, "Conveyor: Gemini turn complete! Proceeding to next phrase in queue.")
+                processPhraseWithClient(clientA, "Worker-A", phrasePcm)
             }
         }
 
+        // Twin Worker B
+        serviceScope.launch(Dispatchers.IO) {
+            for (phrasePcm in channelB) {
+                if (activeMode != TranslationMode.SOLO) continue
+                processPhraseWithClient(clientB, "Worker-B", phrasePcm)
+            }
+        }
+
+        // Playback audio collectors
         serviceScope.launch {
-            webSocketClient.incomingAudioFlow.collect { pcmChunk ->
+            clientA.incomingAudioFlow.collect { pcmChunk ->
+                audioPlayback.enqueueAudioChunk(pcmChunk)
+            }
+        }
+        serviceScope.launch {
+            clientB.incomingAudioFlow.collect { pcmChunk ->
                 audioPlayback.enqueueAudioChunk(pcmChunk)
             }
         }
 
+        // Subtitle collectors
         serviceScope.launch {
-            webSocketClient.interruptedFlow.collect {
-                if (activeMode == TranslationMode.DIALOGUE) {
-                    audioPlayback.flushAndInterrupt()
-                } else {
-                    Log.d(TAG, "SOLO mode: preserving audio playback during background speech recording")
-                }
-            }
+            clientA.subtitleFlow.collect { text -> handleSubtitleText(text) }
+        }
+        serviceScope.launch {
+            clientB.subtitleFlow.collect { text -> handleSubtitleText(text) }
         }
 
+        // Interrupted signals
         serviceScope.launch {
-            webSocketClient.subtitleFlow.collect { text ->
-                if (text.isNotBlank()) {
-                    currentSessionTranscript.append(text).append(" ")
-                    currentSessionId?.let { sId ->
-                        val historyList = prefsManager.loadHistory()
-                        val item = historyList.find { it.id == sId }
-                        if (item != null) {
-                            prefsManager.updateHistoryItem(
-                                item.copy(translatedText = currentSessionTranscript.toString().trim())
-                            )
-                        }
-                    }
+            clientA.interruptedFlow.collect {
+                if (activeMode == TranslationMode.DIALOGUE) audioPlayback.flushAndInterrupt()
+            }
+        }
+        serviceScope.launch {
+            clientB.interruptedFlow.collect {
+                if (activeMode == TranslationMode.DIALOGUE) audioPlayback.flushAndInterrupt()
+            }
+        }
+    }
+
+    private suspend fun processPhraseWithClient(
+        client: GeminiLiveWebSocketClient,
+        workerName: String,
+        phrasePcm: ByteArray
+    ) {
+        Log.i(TAG, "$workerName: Processing phrase (${phrasePcm.size} bytes) -> sending to Gemini")
+        client.sendActivityStart()
+
+        val chunkSize = 3200
+        var offset = 0
+        while (offset < phrasePcm.size) {
+            val len = minOf(chunkSize, phrasePcm.size - offset)
+            val chunk = phrasePcm.copyOfRange(offset, offset + len)
+            client.sendAudioChunk(chunk)
+            offset += len
+            delay(2)
+        }
+
+        client.sendActivityEnd()
+        Log.d(TAG, "$workerName: Awaiting turn completion...")
+        client.waitForTurnComplete(timeoutMs = 20000)
+        Log.i(TAG, "$workerName: Turn complete! Ready for next phrase.")
+    }
+
+    private fun handleSubtitleText(text: String) {
+        if (text.isNotBlank()) {
+            _compositeSubtitleFlow.tryEmit(text)
+            currentSessionTranscript.append(text).append(" ")
+            currentSessionId?.let { sId ->
+                val historyList = prefsManager.loadHistory()
+                val item = historyList.find { it.id == sId }
+                if (item != null) {
+                    prefsManager.updateHistoryItem(
+                        item.copy(translatedText = currentSessionTranscript.toString().trim())
+                    )
                 }
             }
         }
@@ -270,12 +325,12 @@ class LiveTranslationService : Service() {
                 for (i in 0 until bytes.size step chunkSize) {
                     val end = minOf(i + chunkSize, bytes.size)
                     val chunk = bytes.copyOfRange(i, end)
-                    webSocketClient.sendAudioChunk(chunk)
+                    clientA.sendAudioChunk(chunk)
                     delay(80)
                 }
                 val silence = ByteArray(3200)
                 repeat(5) {
-                    webSocketClient.sendAudioChunk(silence)
+                    clientA.sendAudioChunk(silence)
                     delay(80)
                 }
                 Log.i(TAG, "Test PCM injection complete")
