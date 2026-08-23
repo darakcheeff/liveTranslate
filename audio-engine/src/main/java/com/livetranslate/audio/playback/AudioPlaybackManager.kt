@@ -8,6 +8,8 @@ import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.max
+import kotlin.math.min
 
 class AudioPlaybackManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -17,6 +19,7 @@ class AudioPlaybackManager(
         const val SAMPLE_RATE = 24000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        const val DIGITAL_GAIN_FACTOR = 2.2f // 220% digital gain boost for loud and crisp speech
     }
 
     private var audioTrack: AudioTrack? = null
@@ -28,17 +31,10 @@ class AudioPlaybackManager(
     fun initialize(mode: TranslationMode): Boolean {
         release()
 
-        val usage = when (mode) {
-            TranslationMode.SOLO -> AudioAttributes.USAGE_MEDIA
-            TranslationMode.DIALOGUE -> AudioAttributes.USAGE_VOICE_COMMUNICATION
-        }
-
-        val contentType = AudioAttributes.CONTENT_TYPE_SPEECH
-
+        // Use USAGE_MEDIA so playback comes out loud and clear through the main loudspeaker or headphones
         val attributes = AudioAttributes.Builder()
-            .setUsage(usage)
-            .setContentType(contentType)
-            .setFlags(AudioAttributes.FLAG_LOW_LATENCY)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
         val format = AudioFormat.Builder()
@@ -58,9 +54,10 @@ class AudioPlaybackManager(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
+            audioTrack?.setVolume(1.0f)
             audioTrack?.play()
             isPlaying.set(true)
-            Log.i(TAG, "AudioTrack initialized and playing in mode: ${mode.name}")
+            Log.i(TAG, "AudioTrack initialized on loudspeaker with gain boost $DIGITAL_GAIN_FACTOR in mode: ${mode.name}")
             startPlaybackLoop()
             return true
         } catch (e: Exception) {
@@ -70,8 +67,9 @@ class AudioPlaybackManager(
     }
 
     fun enqueueAudioChunk(pcmChunk: ByteArray) {
-        audioQueue.offer(pcmChunk)
-        Log.d(TAG, "Enqueued ${pcmChunk.size} bytes for playback")
+        val boostedChunk = applyDigitalGain(pcmChunk, DIGITAL_GAIN_FACTOR)
+        audioQueue.offer(boostedChunk)
+        Log.d(TAG, "Enqueued ${pcmChunk.size} bytes (boosted) for playback")
     }
 
     fun flushAndInterrupt() {
@@ -117,5 +115,17 @@ class AudioPlaybackManager(
             Log.w(TAG, "Error releasing AudioTrack", e)
         }
         onPlaybackActiveChanged?.invoke(false)
+    }
+
+    private fun applyDigitalGain(pcm16Bytes: ByteArray, gainMultiplier: Float): ByteArray {
+        val boosted = ByteArray(pcm16Bytes.size)
+        for (i in 0 until pcm16Bytes.size step 2) {
+            val sample = ((pcm16Bytes[i + 1].toInt() shl 8) or (pcm16Bytes[i].toInt() and 0xFF)).toShort()
+            val scaled = (sample * gainMultiplier).toInt()
+            val clamped = scaled.coerceIn(-32768, 32767).toShort()
+            boosted[i] = (clamped.toInt() and 0xFF).toByte()
+            boosted[i + 1] = ((clamped.toInt() shr 8) and 0xFF).toByte()
+        }
+        return boosted
     }
 }
