@@ -2,6 +2,7 @@ package com.livetranslate.gemini.client
 
 import android.util.Base64
 import android.util.Log
+import com.livetranslate.core.model.ConnectionState
 import com.livetranslate.core.model.GeminiConfig
 import com.livetranslate.core.model.TranslationMode
 import com.livetranslate.gemini.failover.FailoverResult
@@ -22,14 +23,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-sealed class ConnectionState {
-    object Idle : ConnectionState()
-    data class Connecting(val model: String, val keyIndex: Int) : ConnectionState()
-    data class Connected(val model: String, val keyIndex: Int) : ConnectionState()
-    data class RotatingKey(val reason: String, val newKeyIndex: Int) : ConnectionState()
-    data class FallbackModel(val fromModel: String, val toModel: String) : ConnectionState()
-    data class Error(val message: String, val isRecoverable: Boolean) : ConnectionState()
-}
+
 
 class GeminiLiveWebSocketClient(
     private var config: GeminiConfig,
