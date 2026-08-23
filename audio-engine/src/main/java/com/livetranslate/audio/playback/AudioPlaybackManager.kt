@@ -3,6 +3,7 @@ package com.livetranslate.audio.playback
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.util.Log
 import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -12,19 +13,15 @@ class AudioPlaybackManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
-        const val SAMPLE_RATE = 24000 // Gemini Live API output sample rate
+        private const val TAG = "AudioPlayback"
+        const val SAMPLE_RATE = 24000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        const val JITTER_BUFFER_MS = 180 // 180ms buffer before initial play
-        const val BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000 // 48 bytes/ms
-        const val JITTER_THRESHOLD_BYTES = JITTER_BUFFER_MS * BYTES_PER_MS
     }
 
     private var audioTrack: AudioTrack? = null
     private val isPlaying = AtomicBoolean(false)
-    private val isBuffering = AtomicBoolean(true)
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
-    private var queuedBytes = 0
 
     var onPlaybackActiveChanged: ((Boolean) -> Unit)? = null
 
@@ -51,7 +48,7 @@ class AudioPlaybackManager(
             .build()
 
         val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        val bufferSize = maxOf(minBufferSize, JITTER_THRESHOLD_BYTES * 4)
+        val bufferSize = maxOf(minBufferSize, 3200 * 8)
 
         try {
             audioTrack = AudioTrack.Builder()
@@ -63,57 +60,47 @@ class AudioPlaybackManager(
 
             audioTrack?.play()
             isPlaying.set(true)
-            isBuffering.set(true)
+            Log.i(TAG, "AudioTrack initialized and playing in mode: ${mode.name}")
             startPlaybackLoop()
             return true
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize AudioTrack", e)
             return false
         }
     }
 
     fun enqueueAudioChunk(pcmChunk: ByteArray) {
         audioQueue.offer(pcmChunk)
-        queuedBytes += pcmChunk.size
+        Log.d(TAG, "Enqueued ${pcmChunk.size} bytes for playback")
     }
 
-    /**
-     * Interruption handling from Gemini Live (interrupted: true)
-     */
     fun flushAndInterrupt() {
         audioQueue.clear()
-        queuedBytes = 0
-        isBuffering.set(true)
         try {
             audioTrack?.pause()
             audioTrack?.flush()
             audioTrack?.play()
         } catch (e: Exception) {
-            // Ignore state exceptions during flush
+            Log.w(TAG, "Error flushing AudioTrack", e)
         }
         onPlaybackActiveChanged?.invoke(false)
     }
 
     private fun startPlaybackLoop() {
         scope.launch {
+            var chunksPlayed = 0
             while (isPlaying.get() && isActive) {
-                if (isBuffering.get()) {
-                    if (queuedBytes >= JITTER_THRESHOLD_BYTES) {
-                        isBuffering.set(false)
-                    } else {
-                        delay(20)
-                        continue
-                    }
-                }
-
                 val chunk = audioQueue.poll()
                 if (chunk != null) {
-                    queuedBytes -= chunk.size
                     onPlaybackActiveChanged?.invoke(true)
-                    audioTrack?.write(chunk, 0, chunk.size)
+                    val written = audioTrack?.write(chunk, 0, chunk.size) ?: 0
+                    chunksPlayed++
+                    if (chunksPlayed % 10 == 0) {
+                        Log.d(TAG, "Played $chunksPlayed audio chunks ($written bytes written)")
+                    }
                 } else {
                     onPlaybackActiveChanged?.invoke(false)
-                    isBuffering.set(true)
-                    delay(20)
+                    delay(10)
                 }
             }
         }
@@ -122,13 +109,12 @@ class AudioPlaybackManager(
     fun release() {
         isPlaying.set(false)
         audioQueue.clear()
-        queuedBytes = 0
         try {
             audioTrack?.stop()
             audioTrack?.release()
             audioTrack = null
         } catch (e: Exception) {
-            // Ignore
+            Log.w(TAG, "Error releasing AudioTrack", e)
         }
         onPlaybackActiveChanged?.invoke(false)
     }
