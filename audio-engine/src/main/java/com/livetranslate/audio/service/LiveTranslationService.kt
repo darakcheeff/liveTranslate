@@ -16,6 +16,7 @@ import com.livetranslate.audio.focus.AudioFocusManager
 import com.livetranslate.audio.playback.AudioPlaybackManager
 import com.livetranslate.core.model.ConnectionState
 import com.livetranslate.core.model.GeminiConfig
+import com.livetranslate.core.model.HistoryItem
 import com.livetranslate.core.model.TranslationMode
 import com.livetranslate.core.security.EncryptedPreferencesManager
 import com.livetranslate.gemini.client.GeminiLiveWebSocketClient
@@ -23,6 +24,8 @@ import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
+import java.util.UUID
 
 class LiveTranslationService : Service() {
 
@@ -175,12 +178,16 @@ class LiveTranslationService : Service() {
             webSocketClient.subtitleFlow.collect { text ->
                 val config = prefsManager.loadConfig()
                 if (config.saveHistory && text.isNotBlank()) {
-                    prefsManager.addHistoryItem(
-                        mode = activeMode,
-                        sourceLang = config.ourLanguage,
-                        targetLang = config.opponentLanguage,
-                        originalText = "",
-                        translatedText = text
+                    prefsManager.appendHistoryItem(
+                        HistoryItem(
+                            id = UUID.randomUUID().toString(),
+                            timestamp = System.currentTimeMillis(),
+                            mode = activeMode,
+                            sourceLang = config.ourLanguage,
+                            targetLang = config.opponentLanguage,
+                            originalText = "",
+                            translatedText = text
+                        )
                     )
                 }
             }
