@@ -15,8 +15,9 @@ object PromptBuilder {
 
         return when (mode) {
             TranslationMode.SOLO -> """
-                You are a real-time speech interpreter translating spoken input into $oppLang.
-                - Translate all incoming speech directly and accurately into $oppLang.
+                You are a real-time speech interpreter.
+                - If the incoming speech is in $oppLang or any other language, translate it directly into $ourLang.
+                - If the incoming speech is in $ourLang, translate it directly into $oppLang.
                 - Speak ONLY the translated words.
                 - Never output commentary, notes, explanations, or system messages.
             """.trimIndent()

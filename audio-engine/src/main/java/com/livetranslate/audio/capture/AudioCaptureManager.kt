@@ -28,11 +28,9 @@ class AudioCaptureManager(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200  // 100 ms per chunk
-        const val VAD_SPEECH_RMS_THRESHOLD = 30.0
-        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech start
-        const val TRAILING_SILENCE_CHUNKS = 5          // 500 ms of silence = sentence boundary
-        // Safety fallback: force a turn boundary after 25 seconds of uninterrupted speech
-        const val SOLO_MAX_SEGMENT_CHUNKS = 250
+        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech
+        const val TRAILING_SILENCE_CHUNKS = 5          // 500 ms silence = pause / end of phrase
+        const val SOLO_MAX_SEGMENT_CHUNKS = 200        // 20s safety cutoff if continuous talking
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -41,9 +39,11 @@ class AudioCaptureManager(
     private val _waveformRmsFlow = MutableSharedFlow<Float>(extraBufferCapacity = 16)
     val waveformRmsFlow: SharedFlow<Float> = _waveformRmsFlow.asSharedFlow()
 
-    // Emits Unit when a natural pause (or safety fallback) signals a turn should be completed
-    private val _soloSegmentCompleteFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
-    val soloSegmentCompleteFlow: SharedFlow<Unit> = _soloSegmentCompleteFlow.asSharedFlow()
+    private val _soloActivityStartFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val soloActivityStartFlow: SharedFlow<Unit> = _soloActivityStartFlow.asSharedFlow()
+
+    private val _soloActivityEndFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val soloActivityEndFlow: SharedFlow<Unit> = _soloActivityEndFlow.asSharedFlow()
 
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
@@ -54,7 +54,6 @@ class AudioCaptureManager(
     private var pcmFileOutputStream: FileOutputStream? = null
 
     fun setDucking(enabled: Boolean) {
-        // In SOLO mode never duck: we capture speaker audio through mic regardless of playback
         if (currentMode == TranslationMode.DIALOGUE) {
             isDucking.set(enabled)
         } else {
@@ -109,6 +108,8 @@ class AudioCaptureManager(
                 var consecutiveSilenceChunks = 0
                 var isInConfirmedSpeech = false
                 var totalSpeechChunksSent = 0
+                var ambientNoiseRms = 35.0
+                var tickCounter = 0
                 val preSpeechRingBuffer = ArrayDeque<ByteArray>(6)
 
                 while (isRecording.get() && isActive) {
@@ -122,20 +123,36 @@ class AudioCaptureManager(
                         if (isDucking.get()) continue
 
                         val currentChunk = buffer.copyOf(readBytes)
+                        tickCounter++
 
-                        if (rms >= VAD_SPEECH_RMS_THRESHOLD) {
+                        // Adaptive noise floor calculation
+                        val speechThreshold = maxOf(70.0, ambientNoiseRms * 1.8)
+                        val silenceThreshold = maxOf(40.0, ambientNoiseRms * 1.25)
+
+                        // Periodic debug status log every 3 seconds
+                        if (tickCounter % 30 == 0) {
+                            Log.d(TAG, "VAD Status: RMS=%.1f, NoiseFloor=%.1f, SpeechThresh=%.1f, SilenceThresh=%.1f, Speaking=%b".format(
+                                rms, ambientNoiseRms, speechThreshold, silenceThreshold, isInConfirmedSpeech
+                            ))
+                        }
+
+                        if (rms >= speechThreshold) {
                             consecutiveSpeechChunks++
                             consecutiveSilenceChunks = 0
 
                             if (!isInConfirmedSpeech) {
-                                // Buffer pre-speech audio for context (catches first syllable)
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
 
                                 if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS) {
                                     isInConfirmedSpeech = true
                                     totalSpeechChunksSent = 0
-                                    Log.d(TAG, "VAD: Confirmed speech started (RMS: $rms)")
+                                    Log.i(TAG, "VAD: >>> SPEECH START <<< (RMS=%.1f, NoiseFloor=%.1f, Thresh=%.1f)".format(
+                                        rms, ambientNoiseRms, speechThreshold
+                                    ))
+                                    if (currentMode == TranslationMode.SOLO) {
+                                        _soloActivityStartFlow.emit(Unit)
+                                    }
                                     while (preSpeechRingBuffer.isNotEmpty()) {
                                         _audioChunkFlow.emit(preSpeechRingBuffer.removeFirst())
                                         totalSpeechChunksSent++
@@ -145,41 +162,36 @@ class AudioCaptureManager(
                                 _audioChunkFlow.emit(currentChunk)
                                 totalSpeechChunksSent++
 
-                                // SOLO safety fallback: if speaker talks for >25 sec without any pause,
-                                // force a turn boundary so translation doesn't starve indefinitely
-                                if (currentMode == TranslationMode.SOLO
-                                    && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS
-                                ) {
-                                    Log.d(TAG, "VAD (SOLO): Safety fallback after 25s. Sending turnComplete.")
-                                    _soloSegmentCompleteFlow.emit(Unit)
+                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
+                                    Log.i(TAG, "VAD (SOLO): Safety fallback after 20s. Emitting activityEnd.")
+                                    _soloActivityEndFlow.emit(Unit)
                                     totalSpeechChunksSent = 0
-                                    // Keep isInConfirmedSpeech = true — speech continues
                                 }
                             }
                         } else {
-                            // SILENCE detected
+                            // Audio below speech threshold
                             consecutiveSpeechChunks = 0
                             if (isInConfirmedSpeech) {
                                 consecutiveSilenceChunks++
                                 if (consecutiveSilenceChunks <= TRAILING_SILENCE_CHUNKS) {
-                                    // Include trailing audio so sentence tail is captured
                                     _audioChunkFlow.emit(currentChunk)
                                     totalSpeechChunksSent++
                                 } else {
-                                    // Natural pause detected: this is a sentence/phrase boundary
+                                    // 500ms silence confirmed = natural pause / end of phrase
                                     isInConfirmedSpeech = false
                                     consecutiveSilenceChunks = 0
                                     totalSpeechChunksSent = 0
                                     preSpeechRingBuffer.clear()
-                                    Log.d(TAG, "VAD: Natural pause detected. Sending turnComplete.")
-
+                                    Log.i(TAG, "VAD: <<< SPEECH END / PAUSE >>> (Silence 500ms, RMS=%.1f, NoiseFloor=%.1f)".format(
+                                        rms, ambientNoiseRms
+                                    ))
                                     if (currentMode == TranslationMode.SOLO) {
-                                        // Signal Gemini to translate this phrase now
-                                        _soloSegmentCompleteFlow.emit(Unit)
+                                        _soloActivityEndFlow.emit(Unit)
                                     }
-                                    // DIALOGUE mode: Gemini's own server VAD handles turn detection
                                 }
                             } else {
+                                // Background noise adaptation when not speaking
+                                ambientNoiseRms = (ambientNoiseRms * 0.95 + rms * 0.05).coerceIn(15.0, 200.0)
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
                             }

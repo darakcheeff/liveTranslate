@@ -16,7 +16,20 @@ data class RealtimeInputMessage(
 data class SetupConfig(
     val model: String,
     val generationConfig: GenerationConfig,
-    val systemInstruction: Content? = null
+    val systemInstruction: Content? = null,
+    // In SOLO mode: disable Gemini's built-in VAD so we can use manual activityStart/activityEnd
+    val realtimeInputConfig: RealtimeInputConfig? = null
+)
+
+@Serializable
+data class RealtimeInputConfig(
+    val automaticActivityDetection: AutomaticActivityDetection? = null
+)
+
+@Serializable
+data class AutomaticActivityDetection(
+    // Set to true to disable Gemini's server-side VAD (needed for manual activity control)
+    val disabled: Boolean = true
 )
 
 @Serializable
@@ -62,17 +75,18 @@ data class Blob(
     val data: String
 )
 
-// For native audio streaming models: signals end of one audio turn
-// Use realtimeInput.activityEnd instead of clientContent.turnComplete
-// clientContent.turnComplete causes 1007 error on native audio models
 @Serializable
 data class RealtimeInput(
     val mediaChunks: List<Blob>? = null,
-    val activityEnd: ActivityEnd? = null
+    val activityStart: ActivityStart? = null,  // manual VAD: speech started
+    val activityEnd: ActivityEnd? = null        // manual VAD: speech/phrase ended
 )
 
 @Serializable
-class ActivityEnd  // empty object {}
+class ActivityStart  // empty object {}
+
+@Serializable
+class ActivityEnd    // empty object {}
 
 @Serializable
 data class BidiServerMessage(

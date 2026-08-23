@@ -169,7 +169,14 @@ class GeminiLiveWebSocketClient(
                 ),
                 systemInstruction = Content(
                     parts = listOf(Part(text = systemPrompt))
-                )
+                ),
+                realtimeInputConfig = if (currentMode == TranslationMode.SOLO) {
+                    RealtimeInputConfig(
+                        automaticActivityDetection = AutomaticActivityDetection(disabled = true)
+                    )
+                } else {
+                    null
+                }
             )
         )
 
@@ -205,13 +212,26 @@ class GeminiLiveWebSocketClient(
         }
     }
 
+    fun sendActivityStart() {
+        val ws = activeWebSocket ?: return
+        if (_connectionState.value !is ConnectionState.Connected) return
+        try {
+            val msg = json.encodeToString(
+                RealtimeInputMessage(
+                    realtimeInput = RealtimeInput(activityStart = ActivityStart())
+                )
+            )
+            ws.send(msg)
+            Log.d(TAG, "Sent activityStart to Gemini")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending activityStart", e)
+        }
+    }
 
     fun sendActivityEnd() {
         val ws = activeWebSocket ?: return
         if (_connectionState.value !is ConnectionState.Connected) return
         try {
-            // For native audio models, use realtimeInput.activityEnd (NOT clientContent.turnComplete)
-            // clientContent.turnComplete causes 1007 "invalid argument" on native audio models
             val msg = json.encodeToString(
                 RealtimeInputMessage(
                     realtimeInput = RealtimeInput(activityEnd = ActivityEnd())
