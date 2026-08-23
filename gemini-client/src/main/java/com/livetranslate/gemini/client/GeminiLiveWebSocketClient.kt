@@ -268,7 +268,6 @@ class GeminiLiveWebSocketClient(
             if (serverContent.interrupted) {
                 Log.i(TAG, "Received interrupted signal from Gemini")
                 _interruptedFlow.tryEmit(Unit)
-                _turnCompleteFlow.tryEmit(Unit) // unblock conveyor if interrupted
             }
 
             serverContent.modelTurn?.parts?.forEach { part ->

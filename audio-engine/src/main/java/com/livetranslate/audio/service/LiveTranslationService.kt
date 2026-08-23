@@ -196,7 +196,7 @@ class LiveTranslationService : Service() {
                 webSocketClient.sendActivityEnd()
 
                 Log.d(TAG, "Conveyor: Awaiting Gemini turn completion...")
-                webSocketClient.waitForTurnComplete(timeoutMs = 7000)
+                webSocketClient.waitForTurnComplete(timeoutMs = 20000)
                 Log.i(TAG, "Conveyor: Gemini turn complete! Proceeding to next phrase in queue.")
             }
         }

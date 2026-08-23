@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.PlaybackParams
+import android.os.Build
 import android.util.Log
 import com.livetranslate.audio.capture.WavFileWriter
 import com.livetranslate.core.model.TranslationMode
@@ -23,13 +25,14 @@ class AudioPlaybackManager(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val DIGITAL_GAIN_FACTOR = 2.0f // 200% digital gain boost
-        const val JITTER_BUFFER_MIN_CHUNKS = 3 // 120ms pre-buffering to prevent network packet underrun jitter
+        const val JITTER_BUFFER_MIN_CHUNKS = 3 // 120ms pre-buffering
     }
 
     private var audioTrack: AudioTrack? = null
     private val isPlaying = AtomicBoolean(false)
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
     private var wavFileWriterRaf: RandomAccessFile? = null
+    private var currentPlaybackSpeed = 1.0f
 
     var onPlaybackActiveChanged: ((Boolean) -> Unit)? = null
 
@@ -61,6 +64,7 @@ class AudioPlaybackManager(
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
             isPlaying.set(true)
+            currentPlaybackSpeed = 1.0f
 
             try {
                 context?.let { ctx ->
@@ -108,6 +112,29 @@ class AudioPlaybackManager(
             var emptyCycles = 0
 
             while (isPlaying.get() && isActive) {
+                val queueSize = audioQueue.size
+
+                // Dynamic time-stretching: accelerate playback when queue is growing to stay in sync with live speaker
+                val targetSpeed = when {
+                    queueSize > 25 -> 1.30f   // Heavy backlog -> 30% faster
+                    queueSize > 12 -> 1.20f   // Moderate backlog -> 20% faster
+                    queueSize > 5  -> 1.10f   // Slight backlog -> 10% faster
+                    else           -> 1.00f   // Realtime speed
+                }
+
+                if (Math.abs(currentPlaybackSpeed - targetSpeed) > 0.04f) {
+                    try {
+                        val params = PlaybackParams()
+                        params.speed = targetSpeed
+                        params.pitch = 1.0f // Preserve natural pitch
+                        audioTrack?.playbackParams = params
+                        currentPlaybackSpeed = targetSpeed
+                        Log.d(TAG, "Dynamic speed adjusted: ${targetSpeed}x (queue: $queueSize)")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not set dynamic playback speed", e)
+                    }
+                }
+
                 if (isBuffering) {
                     if (audioQueue.size >= JITTER_BUFFER_MIN_CHUNKS) {
                         isBuffering = false
@@ -152,24 +179,29 @@ class AudioPlaybackManager(
         } catch (e: Exception) {}
 
         try {
-            audioTrack?.stop()
-            audioTrack?.release()
+            audioTrack?.apply {
+                if (state == AudioTrack.STATE_INITIALIZED) {
+                    pause()
+                    flush()
+                    stop()
+                }
+                release()
+            }
             audioTrack = null
+            Log.i(TAG, "AudioTrack released")
         } catch (e: Exception) {
-            Log.w(TAG, "Error releasing AudioTrack", e)
+            Log.e(TAG, "Error releasing AudioTrack", e)
         }
-        onPlaybackActiveChanged?.invoke(false)
     }
 
-    private fun applyDigitalGain(pcm16Bytes: ByteArray, gainMultiplier: Float): ByteArray {
-        val boosted = ByteArray(pcm16Bytes.size)
-        for (i in 0 until pcm16Bytes.size step 2) {
-            val sample = ((pcm16Bytes[i + 1].toInt() shl 8) or (pcm16Bytes[i].toInt() and 0xFF)).toShort()
-            val scaled = (sample * gainMultiplier).toInt()
-            val clamped = scaled.coerceIn(-32768, 32767).toShort()
-            boosted[i] = (clamped.toInt() and 0xFF).toByte()
-            boosted[i + 1] = ((clamped.toInt() shr 8) and 0xFF).toByte()
+    private fun applyDigitalGain(buffer: ByteArray, gain: Float): ByteArray {
+        val output = ByteArray(buffer.size)
+        for (i in 0 until buffer.size step 2) {
+            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+            val amplified = (sample * gain).toInt().coerceIn(-32768, 32767).toShort()
+            output[i] = (amplified.toInt() and 0xFF).toByte()
+            output[i + 1] = ((amplified.toInt() shr 8) and 0xFF).toByte()
         }
-        return boosted
+        return output
     }
 }
