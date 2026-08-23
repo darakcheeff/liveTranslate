@@ -31,8 +31,8 @@ class AudioCaptureManager(
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200  // 100 ms per chunk
         const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech start
-        const val PAUSE_SILENCE_CHUNKS = 4            // 400 ms of silence = natural sentence pause
-        const val SOLO_MAX_SEGMENT_CHUNKS = 75        // 7.5s safety limit for uninterrupted monologue
+        const val PAUSE_SILENCE_CHUNKS = 3            // 300 ms of silence = natural sentence pause
+        const val SOLO_MAX_SEGMENT_CHUNKS = 40        // 4.0s max limit for uninterrupted monologue
         const val WINDOW_SIZE = 30                    // 3.0s sliding window for ambient noise floor
     }
 

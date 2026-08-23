@@ -110,28 +110,33 @@ class AudioPlaybackManager(
         scope.launch {
             var isBuffering = true
             var emptyCycles = 0
+            var lastSpeedChangeTime = 0L
 
             while (isPlaying.get() && isActive) {
+                val now = System.currentTimeMillis()
                 val queueSize = audioQueue.size
 
-                // Dynamic time-stretching: accelerate playback when queue is growing to stay in sync with live speaker
-                val targetSpeed = when {
-                    queueSize > 25 -> 1.30f   // Heavy backlog -> 30% faster
-                    queueSize > 12 -> 1.20f   // Moderate backlog -> 20% faster
-                    queueSize > 5  -> 1.10f   // Slight backlog -> 10% faster
-                    else           -> 1.00f   // Realtime speed
-                }
+                // Rate-limit speed changes to once per 2 seconds with deadband hysteresis to prevent stuttering
+                if (now - lastSpeedChangeTime > 2000L) {
+                    val targetSpeed = when {
+                        queueSize > 20 -> 1.25f   // Heavy backlog -> 25% faster
+                        queueSize > 12 -> 1.15f   // Moderate backlog -> 15% faster
+                        queueSize < 4  -> 1.00f   // Caught up -> normal speed
+                        else           -> currentPlaybackSpeed
+                    }
 
-                if (Math.abs(currentPlaybackSpeed - targetSpeed) > 0.04f) {
-                    try {
-                        val params = PlaybackParams()
-                        params.speed = targetSpeed
-                        params.pitch = 1.0f // Preserve natural pitch
-                        audioTrack?.playbackParams = params
-                        currentPlaybackSpeed = targetSpeed
-                        Log.d(TAG, "Dynamic speed adjusted: ${targetSpeed}x (queue: $queueSize)")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not set dynamic playback speed", e)
+                    if (Math.abs(currentPlaybackSpeed - targetSpeed) > 0.04f) {
+                        try {
+                            val params = PlaybackParams()
+                            params.speed = targetSpeed
+                            params.pitch = 1.0f // Preserve natural pitch
+                            audioTrack?.playbackParams = params
+                            currentPlaybackSpeed = targetSpeed
+                            lastSpeedChangeTime = now
+                            Log.d(TAG, "Dynamic speed smoothly adjusted: ${targetSpeed}x (queue: $queueSize)")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not set dynamic playback speed", e)
+                        }
                     }
                 }
 
