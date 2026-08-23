@@ -34,6 +34,7 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":gemini-client"))
+    implementation(libs.okhttp)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
