@@ -170,7 +170,11 @@ class LiveTranslationService : Service() {
 
         serviceScope.launch {
             webSocketClient.interruptedFlow.collect {
-                audioPlayback.flushAndInterrupt()
+                if (activeMode == TranslationMode.DIALOGUE) {
+                    audioPlayback.flushAndInterrupt()
+                } else {
+                    Log.d(TAG, "SOLO mode: preserving audio playback during background speech recording")
+                }
             }
         }
 

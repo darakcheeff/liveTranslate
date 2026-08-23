@@ -28,9 +28,10 @@ class AudioCaptureManager(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200  // 100 ms per chunk
-        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech
-        const val TRAILING_SILENCE_CHUNKS = 5          // 500 ms silence = pause / end of phrase
-        const val SOLO_MAX_SEGMENT_CHUNKS = 200        // 20s safety cutoff if continuous talking
+        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech start
+        const val PAUSE_SILENCE_CHUNKS = 4            // 400 ms of silence = natural sentence pause
+        const val SOLO_MAX_SEGMENT_CHUNKS = 120       // 12s safety fallback if uninterrupted speech
+        const val WINDOW_SIZE = 30                    // 3.0s sliding window for noise floor tracking
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -108,8 +109,8 @@ class AudioCaptureManager(
                 var consecutiveSilenceChunks = 0
                 var isInConfirmedSpeech = false
                 var totalSpeechChunksSent = 0
-                var ambientNoiseRms = 35.0
                 var tickCounter = 0
+                val minWindow = ArrayDeque<Double>(WINDOW_SIZE + 2)
                 val preSpeechRingBuffer = ArrayDeque<ByteArray>(6)
 
                 while (isRecording.get() && isActive) {
@@ -125,14 +126,21 @@ class AudioCaptureManager(
                         val currentChunk = buffer.copyOf(readBytes)
                         tickCounter++
 
-                        // Adaptive noise floor calculation
-                        val speechThreshold = maxOf(70.0, ambientNoiseRms * 1.8)
-                        val silenceThreshold = maxOf(40.0, ambientNoiseRms * 1.25)
+                        // Sliding window percentile for accurate noise floor in any acoustic environment
+                        if (minWindow.size >= WINDOW_SIZE) minWindow.removeFirst()
+                        minWindow.addLast(rms)
 
-                        // Periodic debug status log every 3 seconds
+                        val sortedWindow = minWindow.sorted()
+                        val percentileIndex = (sortedWindow.size / 6).coerceIn(0, sortedWindow.size - 1)
+                        val noiseFloor = sortedWindow[percentileIndex].coerceIn(25.0, 900.0)
+
+                        // Calibrated thresholds from real-world data (Zoom, Monologue, Street Interview)
+                        val speechThreshold = maxOf(60.0, noiseFloor * 1.55)
+                        val silenceThreshold = maxOf(35.0, noiseFloor * 1.25)
+
                         if (tickCounter % 30 == 0) {
-                            Log.d(TAG, "VAD Status: RMS=%.1f, NoiseFloor=%.1f, SpeechThresh=%.1f, SilenceThresh=%.1f, Speaking=%b".format(
-                                rms, ambientNoiseRms, speechThreshold, silenceThreshold, isInConfirmedSpeech
+                            Log.d(TAG, "VAD: RMS=%.1f, Floor=%.1f, SpeechThresh=%.1f, SilThresh=%.1f, Speaking=%b".format(
+                                rms, noiseFloor, speechThreshold, silenceThreshold, isInConfirmedSpeech
                             ))
                         }
 
@@ -147,8 +155,8 @@ class AudioCaptureManager(
                                 if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS) {
                                     isInConfirmedSpeech = true
                                     totalSpeechChunksSent = 0
-                                    Log.i(TAG, "VAD: >>> SPEECH START <<< (RMS=%.1f, NoiseFloor=%.1f, Thresh=%.1f)".format(
-                                        rms, ambientNoiseRms, speechThreshold
+                                    Log.i(TAG, "VAD: >>> PHRASE START <<< (RMS=%.1f, Floor=%.1f, Thresh=%.1f)".format(
+                                        rms, noiseFloor, speechThreshold
                                     ))
                                     if (currentMode == TranslationMode.SOLO) {
                                         _soloActivityStartFlow.emit(Unit)
@@ -163,35 +171,42 @@ class AudioCaptureManager(
                                 totalSpeechChunksSent++
 
                                 if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
-                                    Log.i(TAG, "VAD (SOLO): Safety fallback after 20s. Emitting activityEnd.")
+                                    Log.i(TAG, "VAD (SOLO): 12s safety limit reached. Emitting activityEnd.")
                                     _soloActivityEndFlow.emit(Unit)
                                     totalSpeechChunksSent = 0
                                 }
                             }
-                        } else {
-                            // Audio below speech threshold
+                        } else if (rms < silenceThreshold) {
                             consecutiveSpeechChunks = 0
                             if (isInConfirmedSpeech) {
                                 consecutiveSilenceChunks++
-                                if (consecutiveSilenceChunks <= TRAILING_SILENCE_CHUNKS) {
+                                if (consecutiveSilenceChunks <= PAUSE_SILENCE_CHUNKS) {
                                     _audioChunkFlow.emit(currentChunk)
                                     totalSpeechChunksSent++
                                 } else {
-                                    // 500ms silence confirmed = natural pause / end of phrase
+                                    // 400ms pause confirmed -> phrase boundary detected
                                     isInConfirmedSpeech = false
                                     consecutiveSilenceChunks = 0
                                     totalSpeechChunksSent = 0
                                     preSpeechRingBuffer.clear()
-                                    Log.i(TAG, "VAD: <<< SPEECH END / PAUSE >>> (Silence 500ms, RMS=%.1f, NoiseFloor=%.1f)".format(
-                                        rms, ambientNoiseRms
+                                    Log.i(TAG, "VAD: <<< PHRASE PAUSE (400ms) >>> (RMS=%.1f, Floor=%.1f)".format(
+                                        rms, noiseFloor
                                     ))
                                     if (currentMode == TranslationMode.SOLO) {
                                         _soloActivityEndFlow.emit(Unit)
                                     }
                                 }
                             } else {
-                                // Background noise adaptation when not speaking
-                                ambientNoiseRms = (ambientNoiseRms * 0.95 + rms * 0.05).coerceIn(15.0, 200.0)
+                                if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
+                                preSpeechRingBuffer.addLast(currentChunk)
+                            }
+                        } else {
+                            // In hysteresis zone (between silence and speech threshold)
+                            consecutiveSpeechChunks = 0
+                            if (isInConfirmedSpeech) {
+                                _audioChunkFlow.emit(currentChunk)
+                                totalSpeechChunksSent++
+                            } else {
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
                             }
