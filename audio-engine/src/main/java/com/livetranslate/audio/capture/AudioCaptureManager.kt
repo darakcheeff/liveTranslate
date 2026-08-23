@@ -26,7 +26,9 @@ class AudioCaptureManager(
         const val SAMPLE_RATE = 16000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono (1600 samples * 2 bytes)
+        const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono
+        const val VAD_SPEECH_RMS_THRESHOLD = 20.0
+        const val TRAILING_SILENCE_CHUNKS = 4 // 400 ms of trailing silence before ending turn
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -97,7 +99,10 @@ class AudioCaptureManager(
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
-                var chunkCount = 0
+                var isUserSpeaking = false
+                var silenceChunksCount = 0
+                var totalChunksEmitted = 0
+
                 while (isRecording.get() && isActive) {
                     val readBytes = record.read(buffer, 0, CHUNK_SIZE_BYTES)
                     if (readBytes > 0) {
@@ -108,11 +113,27 @@ class AudioCaptureManager(
                             pcmFileOutputStream?.write(buffer, 0, readBytes)
                         } catch (e: Exception) {}
 
-                        val chunkCopy = buffer.copyOf(readBytes)
-                        _audioChunkFlow.emit(chunkCopy)
-                        chunkCount++
-                        if (chunkCount % 50 == 0) {
-                            Log.d(TAG, "Captured $chunkCount chunks (latest RMS: $rms)")
+                        if (isDucking.get()) {
+                            // Suppress mic input during translated speech playback
+                            continue
+                        }
+
+                        if (rms >= VAD_SPEECH_RMS_THRESHOLD) {
+                            isUserSpeaking = true
+                            silenceChunksCount = 0
+                            val chunkCopy = buffer.copyOf(readBytes)
+                            _audioChunkFlow.emit(chunkCopy)
+                            totalChunksEmitted++
+                        } else if (isUserSpeaking) {
+                            silenceChunksCount++
+                            if (silenceChunksCount <= TRAILING_SILENCE_CHUNKS) {
+                                val chunkCopy = buffer.copyOf(readBytes)
+                                _audioChunkFlow.emit(chunkCopy)
+                                totalChunksEmitted++
+                            } else {
+                                isUserSpeaking = false
+                                Log.d(TAG, "VAD: Speech pause detected after $totalChunksEmitted chunks. Pausing mic stream to trigger Gemini translation turn.")
+                            }
                         }
                     }
                 }
