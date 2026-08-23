@@ -6,6 +6,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -17,14 +18,14 @@ class AudioCaptureManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
+        private const val TAG = "AudioCapture"
         const val SAMPLE_RATE = 16000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono (1600 samples * 2 bytes)
-        const val DEFAULT_SILENCE_RMS_THRESHOLD = 200.0
     }
 
-    private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
     val audioChunkFlow: SharedFlow<ByteArray> = _audioChunkFlow.asSharedFlow()
 
     private val _waveformRmsFlow = MutableSharedFlow<Float>(extraBufferCapacity = 16)
@@ -58,49 +59,50 @@ class AudioCaptureManager(
 
             val record = audioRecord ?: return false
             if (record.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord state not initialized")
                 return false
             }
 
-            // Enable hardware Acoustic Echo Cancellation and Noise Suppression
             val audioSessionId = record.audioSessionId
             if (AcousticEchoCanceler.isAvailable()) {
                 echoCanceler = AcousticEchoCanceler.create(audioSessionId)?.apply {
                     enabled = true
                 }
+                Log.d(TAG, "AcousticEchoCanceler enabled")
             }
             if (NoiseSuppressor.isAvailable()) {
                 noiseSuppressor = NoiseSuppressor.create(audioSessionId)?.apply {
                     enabled = true
                 }
+                Log.d(TAG, "NoiseSuppressor enabled")
             }
 
             record.startRecording()
             isRecording.set(true)
+            Log.i(TAG, "AudioRecord capture started successfully")
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
+                var chunkCount = 0
                 while (isRecording.get() && isActive) {
                     val readBytes = record.read(buffer, 0, CHUNK_SIZE_BYTES)
                     if (readBytes > 0) {
                         val rms = calculateRms(buffer, readBytes)
                         _waveformRmsFlow.emit(rms.toFloat())
 
-                        // Dynamic mic threshold when ducking (playback active through speaker)
-                        val effectiveThreshold = if (isDucking.get()) {
-                            DEFAULT_SILENCE_RMS_THRESHOLD * 2.5
-                        } else {
-                            DEFAULT_SILENCE_RMS_THRESHOLD
-                        }
-
-                        if (rms >= effectiveThreshold) {
-                            val chunkCopy = buffer.copyOf(readBytes)
-                            _audioChunkFlow.emit(chunkCopy)
+                        // Stream all captured chunks to Gemini Live API
+                        val chunkCopy = buffer.copyOf(readBytes)
+                        _audioChunkFlow.emit(chunkCopy)
+                        chunkCount++
+                        if (chunkCount % 50 == 0) {
+                            Log.d(TAG, "Captured $chunkCount chunks (latest RMS: $rms)")
                         }
                     }
                 }
             }
             return true
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to start AudioRecord capture", e)
             stopCapture()
             return false
         }
@@ -121,8 +123,9 @@ class AudioCaptureManager(
                 release()
             }
             audioRecord = null
+            Log.i(TAG, "AudioRecord capture stopped")
         } catch (e: Exception) {
-            // Ignore release exceptions
+            Log.e(TAG, "Error stopping AudioRecord", e)
         }
     }
 

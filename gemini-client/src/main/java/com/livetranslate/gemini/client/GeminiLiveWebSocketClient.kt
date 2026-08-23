@@ -1,6 +1,7 @@
 package com.livetranslate.gemini.client
 
 import android.util.Base64
+import android.util.Log
 import com.livetranslate.core.model.ConnectionState
 import com.livetranslate.core.model.GeminiConfig
 import com.livetranslate.core.model.TranslationMode
@@ -25,6 +26,10 @@ class GeminiLiveWebSocketClient(
     private var config: GeminiConfig,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
+    companion object {
+        private const val TAG = "GeminiLiveClient"
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -35,15 +40,12 @@ class GeminiLiveWebSocketClient(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    // Stream of received audio chunks (PCM 24kHz raw bytes)
-    private val _incomingAudioFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    private val _incomingAudioFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
     val incomingAudioFlow: SharedFlow<ByteArray> = _incomingAudioFlow.asSharedFlow()
 
-    // Stream of received subtitle texts
-    private val _subtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    private val _subtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val subtitleFlow: SharedFlow<String> = _subtitleFlow.asSharedFlow()
 
-    // Stream of interruption signals
     private val _interruptedFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val interruptedFlow: SharedFlow<Unit> = _interruptedFlow.asSharedFlow()
 
@@ -65,10 +67,13 @@ class GeminiLiveWebSocketClient(
     fun startSession(mode: TranslationMode) {
         currentMode = mode
         isManualStop.set(false)
+        keyPoolManager.resetModelIndex()
+        Log.i(TAG, "Starting Live session in mode: ${mode.name}")
         connectInternal()
     }
 
     fun stopSession() {
+        Log.i(TAG, "Stopping Live session manually")
         isManualStop.set(true)
         activeWebSocket?.close(1000, "Session stopped by user")
         activeWebSocket = null
@@ -78,21 +83,23 @@ class GeminiLiveWebSocketClient(
     private fun connectInternal() {
         val apiKey = keyPoolManager.getActiveApiKey()
         if (apiKey.isNullOrBlank()) {
-            _connectionState.value = ConnectionState.Error("Список API-ключей пуст", isRecoverable = false)
+            val err = "Список API-ключей пуст. Добавьте ключ в настройках."
+            Log.e(TAG, err)
+            _connectionState.value = ConnectionState.Error(err, isRecoverable = false)
             return
         }
 
         val activeModel = keyPoolManager.getActiveModel()
-        _connectionState.value = ConnectionState.Connecting(
-            model = activeModel,
-            keyIndex = keyPoolManager.currentKeyIndex.value
-        )
+        val keyIdx = keyPoolManager.currentKeyIndex.value
+        Log.i(TAG, "Connecting to WebSocket: model=$activeModel, keyIndex=$keyIdx")
+        _connectionState.value = ConnectionState.Connecting(model = activeModel, keyIndex = keyIdx)
 
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
         val request = Request.Builder().url(url).build()
 
         activeWebSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i(TAG, "WebSocket connected successfully! HTTP ${response.code}")
                 _connectionState.value = ConnectionState.Connected(
                     model = activeModel,
                     keyIndex = keyPoolManager.currentKeyIndex.value
@@ -105,19 +112,22 @@ class GeminiLiveWebSocketClient(
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.w(TAG, "WebSocket server closing: $code ($reason)")
                 webSocket.close(1000, null)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.w(TAG, "WebSocket closed: $code ($reason)")
                 if (!isManualStop.get()) {
                     handleFailover("WebSocket закрыт: $code ($reason)")
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                val code = response?.code ?: 0
+                val msg = response?.message ?: t.message ?: "Unknown error"
+                Log.e(TAG, "WebSocket failure: HTTP $code, msg=$msg", t)
                 if (!isManualStop.get()) {
-                    val code = response?.code ?: 0
-                    val msg = response?.message ?: t.message ?: "Unknown network failure"
                     handleFailover("Сбой WebSocket HTTP $code: $msg")
                 }
             }
@@ -151,12 +161,10 @@ class GeminiLiveWebSocketClient(
         )
 
         val jsonString = json.encodeToString(setupMessage)
+        Log.d(TAG, "Sending setup message: $jsonString")
         webSocket.send(jsonString)
     }
 
-    /**
-     * Sends raw PCM 16kHz audio chunk to Gemini Live API
-     */
     fun sendAudioChunk(pcmChunk: ByteArray) {
         val ws = activeWebSocket ?: return
         if (_connectionState.value !is ConnectionState.Connected) return
@@ -176,7 +184,7 @@ class GeminiLiveWebSocketClient(
             val jsonPayload = json.encodeToString(realtimeMessage)
             ws.send(jsonPayload)
         } catch (e: Exception) {
-            // Buffer overflow or serialization error handled gracefully
+            Log.e(TAG, "Error sending audio chunk", e)
         }
     }
 
@@ -187,6 +195,7 @@ class GeminiLiveWebSocketClient(
                 val serverContent = response.serverContent ?: return@launch
 
                 if (serverContent.interrupted) {
+                    Log.d(TAG, "Received interrupted signal")
                     _interruptedFlow.emit(Unit)
                 }
 
@@ -200,37 +209,41 @@ class GeminiLiveWebSocketClient(
 
                     part.text?.let { txt ->
                         if (txt.isNotBlank()) {
+                            Log.d(TAG, "Received text translation: $txt")
                             _subtitleFlow.emit(txt)
                         }
                     }
                 }
             } catch (e: Exception) {
-                // Ignore unexpected or non-critical JSON payloads
+                Log.e(TAG, "Error parsing server message: $text", e)
             }
         }
     }
 
     private fun handleFailover(reason: String) {
         scope.launch {
-            delay(300) // Small delay to avoid rapid socket churn
+            delay(500)
             val result = keyPoolManager.rotateOnFailure(reason)
             if (result != null) {
                 when (result) {
                     is FailoverResult.KeyRotated -> {
+                        Log.w(TAG, "Key rotated to #${result.keyIndex + 1}: ${result.reason}")
                         _connectionState.value = ConnectionState.RotatingKey(
                             reason = result.reason,
                             newKeyIndex = result.keyIndex
                         )
                     }
                     is FailoverResult.ModelCascaded -> {
+                        Log.w(TAG, "Model cascaded to ${result.newModel}: ${result.reason}")
                         _connectionState.value = ConnectionState.FallbackModel(
                             fromModel = "Previous",
                             toModel = result.newModel
                         )
                     }
                     is FailoverResult.AllExhaustedRestart -> {
+                        Log.e(TAG, "All keys exhausted: ${result.reason}")
                         _connectionState.value = ConnectionState.Error(
-                            message = "Все ключи и модели исчерпаны. Повторный перезапуск...",
+                            message = "Все ключи исчерпали квоту. Ошибка: ${result.reason}",
                             isRecoverable = true
                         )
                     }
@@ -238,7 +251,7 @@ class GeminiLiveWebSocketClient(
                 connectInternal()
             } else {
                 _connectionState.value = ConnectionState.Error(
-                    message = "Критическая ошибка: невозможно переподключиться ($reason)",
+                    message = "Критическая ошибка подключения: $reason",
                     isRecoverable = false
                 )
             }

@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: EncryptedPreferencesManager
 
@@ -30,6 +35,7 @@ class MainActivity : AppCompatActivity() {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            Log.d(TAG, "LiveTranslationService connected")
             val localBinder = binder as? LiveTranslationService.LocalBinder
             translationService = localBinder?.getService()
             isBound = true
@@ -37,6 +43,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d(TAG, "LiveTranslationService disconnected")
             translationService = null
             isBound = false
         }
@@ -130,13 +137,21 @@ class MainActivity : AppCompatActivity() {
         binding.btnStop.visibility = View.VISIBLE
         binding.tvSubtitles.text = ""
 
-        val intent = Intent(this, LiveTranslationService::class.java)
+        val intent = Intent(this, LiveTranslationService::class.java).apply {
+            action = LiveTranslationService.ACTION_START
+            putExtra(LiveTranslationService.EXTRA_MODE, mode.name)
+        }
         ContextCompat.startForegroundService(this, intent)
         translationService?.startTranslation(mode)
     }
 
     private fun stopTranslation() {
+        val intent = Intent(this, LiveTranslationService::class.java).apply {
+            action = LiveTranslationService.ACTION_STOP
+        }
+        ContextCompat.startForegroundService(this, intent)
         translationService?.stopTranslation()
+
         binding.panelIdleButtons.visibility = View.VISIBLE
         binding.btnStop.visibility = View.GONE
         binding.tvStatus.text = getString(R.string.status_idle)
@@ -154,7 +169,11 @@ class MainActivity : AppCompatActivity() {
                     is ConnectionState.RotatingKey -> binding.tvStatus.text = "Ротация ключа #${state.newKeyIndex + 1}"
                     is ConnectionState.FallbackModel -> binding.tvStatus.text = "Каскад на модель ${state.toModel}"
                     is ConnectionState.Error -> binding.tvStatus.text = "Ошибка: ${state.message}"
-                    is ConnectionState.Disconnected -> stopTranslation()
+                    is ConnectionState.Disconnected -> {
+                        binding.panelIdleButtons.visibility = View.VISIBLE
+                        binding.btnStop.visibility = View.GONE
+                        binding.tvStatus.text = getString(R.string.status_idle)
+                    }
                 }
             }
         }
