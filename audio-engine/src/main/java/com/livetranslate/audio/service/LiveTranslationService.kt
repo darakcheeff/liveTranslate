@@ -82,6 +82,10 @@ class LiveTranslationService : Service() {
             audioCapture.setDucking(isPlaying)
         }
 
+        audioCapture.onSpeechEnded = {
+            webSocketClient.sendTurnComplete()
+        }
+
         observeStreams()
         acquireLocks()
     }

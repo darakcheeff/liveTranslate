@@ -42,6 +42,7 @@ class AudioCaptureManager(
     private var noiseSuppressor: NoiseSuppressor? = null
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
+    var onSpeechEnded: (() -> Unit)? = null
     private var pcmFileOutputStream: FileOutputStream? = null
 
     fun setDucking(enabled: Boolean) {
@@ -132,6 +133,7 @@ class AudioCaptureManager(
                                 totalChunksEmitted++
                             } else {
                                 isUserSpeaking = false
+                                onSpeechEnded?.invoke()
                                 Log.d(TAG, "VAD: Speech pause detected after $totalChunksEmitted chunks. Pausing mic stream to trigger Gemini translation turn.")
                             }
                         }

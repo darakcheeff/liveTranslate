@@ -188,6 +188,19 @@ class GeminiLiveWebSocketClient(
         webSocket.send(jsonString)
     }
 
+    fun sendTurnComplete() {
+        val ws = activeWebSocket ?: return
+        if (_connectionState.value !is ConnectionState.Connected) return
+        try {
+            val msg = ClientContentMessage(clientContent = ClientContent(turnComplete = true))
+            val jsonPayload = json.encodeToString(msg)
+            ws.send(jsonPayload)
+            Log.i(TAG, "Sent clientContent: turnComplete=true to Gemini Live WebSocket")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending turnComplete", e)
+        }
+    }
+
     fun sendAudioChunk(pcmChunk: ByteArray) {
         val ws = activeWebSocket ?: return
         if (_connectionState.value !is ConnectionState.Connected) return

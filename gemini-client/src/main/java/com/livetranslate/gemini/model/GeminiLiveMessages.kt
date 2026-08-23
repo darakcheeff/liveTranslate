@@ -97,3 +97,14 @@ data class GeminiModelItem(
     val description: String? = null,
     val supportedGenerationMethods: List<String> = emptyList()
 )
+
+
+@Serializable
+data class ClientContentMessage(
+    val clientContent: ClientContent
+)
+
+@Serializable
+data class ClientContent(
+    val turnComplete: Boolean = true
+)
