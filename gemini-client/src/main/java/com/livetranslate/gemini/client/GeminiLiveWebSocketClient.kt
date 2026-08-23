@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class GeminiLiveWebSocketClient(
     private var config: GeminiConfig,
@@ -60,6 +61,7 @@ class GeminiLiveWebSocketClient(
     private var currentMode: TranslationMode = TranslationMode.SOLO
     private val isManualStop = AtomicBoolean(false)
     private val isConnectingOrConnected = AtomicBoolean(false)
+    private val chunksSentCount = AtomicInteger(0)
 
     fun updateConfig(newConfig: GeminiConfig) {
         this.config = newConfig
@@ -75,6 +77,7 @@ class GeminiLiveWebSocketClient(
         currentMode = mode
         isManualStop.set(false)
         isConnectingOrConnected.set(true)
+        chunksSentCount.set(0)
         keyPoolManager.resetModelIndex()
         Log.i(TAG, "Starting Live session in mode: ${mode.name}")
         connectInternal()
@@ -120,6 +123,7 @@ class GeminiLiveWebSocketClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i(TAG, "RAW INCOMING MSG: $text")
                 handleIncomingMessage(text)
             }
 
@@ -173,7 +177,7 @@ class GeminiLiveWebSocketClient(
         )
 
         val jsonString = json.encodeToString(setupMsg)
-        Log.d(TAG, "Sending setup message: $jsonString")
+        Log.i(TAG, "Sending setup message: $jsonString")
         webSocket.send(jsonString)
     }
 
@@ -195,6 +199,10 @@ class GeminiLiveWebSocketClient(
             )
             val jsonPayload = json.encodeToString(realtimeMsg)
             ws.send(jsonPayload)
+            val count = chunksSentCount.incrementAndGet()
+            if (count % 30 == 0) {
+                Log.d(TAG, "Sent $count audio chunks to Gemini Live WebSocket")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error sending audio chunk", e)
         }
@@ -207,7 +215,7 @@ class GeminiLiveWebSocketClient(
                 val serverContent = response.serverContent ?: return@launch
 
                 if (serverContent.interrupted) {
-                    Log.d(TAG, "Received interrupted signal")
+                    Log.i(TAG, "Received interrupted signal from Gemini")
                     _interruptedFlow.emit(Unit)
                 }
 
@@ -215,14 +223,14 @@ class GeminiLiveWebSocketClient(
                     part.inlineData?.let { blob ->
                         if (blob.data.isNotEmpty()) {
                             val audioBytes = Base64.decode(blob.data, Base64.DEFAULT)
-                            Log.d(TAG, "Received audio chunk from Gemini: ${audioBytes.size} bytes")
+                            Log.i(TAG, "Received AUDIO from Gemini: ${audioBytes.size} bytes! Playing...")
                             _incomingAudioFlow.emit(audioBytes)
                         }
                     }
 
                     part.text?.let { txt ->
                         if (txt.isNotBlank()) {
-                            Log.d(TAG, "Received text translation: $txt")
+                            Log.i(TAG, "Received SUBTITLE text: $txt")
                             _subtitleFlow.emit(txt)
                         }
                     }
