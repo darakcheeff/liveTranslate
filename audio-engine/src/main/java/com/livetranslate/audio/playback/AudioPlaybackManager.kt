@@ -61,7 +61,7 @@ class AudioPlaybackManager(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            audioTrack?.setVolume(1.0f)
+            audioTrack?.setVolume(0.0f) // Muted per user directive (headphones disconnected)
             audioTrack?.play()
             isPlaying.set(true)
             currentPlaybackSpeed = 1.0f
