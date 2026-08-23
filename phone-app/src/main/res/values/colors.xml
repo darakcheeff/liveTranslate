@@ -4,6 +4,7 @@
     <color name="accent">#4285F4</color>
     <color name="background">#121212</color>
     <color name="surface">#1E1E1E</color>
+    <color name="surface_variant">#2A2A2A</color>
     <color name="text_primary">#FFFFFF</color>
     <color name="text_secondary">#AAAAAA</color>
     <color name="stop_red">#EA4335</color>
