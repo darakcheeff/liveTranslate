@@ -63,9 +63,11 @@ class LiveTranslationService : Service() {
         prefsManager = EncryptedPreferencesManager(this)
         audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager(this)
-        audioFocus = AudioFocusManager(this) { hasFocus ->
-            if (hasFocus) resumeTranslation() else pauseTranslation()
-        }
+        audioFocus = AudioFocusManager(
+            this,
+            onFocusLost = { pauseTranslation() },
+            onFocusGained = { resumeTranslation() }
+        )
         val initialConfig = prefsManager.loadConfig()
         webSocketClient = GeminiLiveWebSocketClient(initialConfig)
         modelDiscovery = GeminiModelDiscovery()
