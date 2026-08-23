@@ -37,7 +37,7 @@ class MainActivity : AppCompatActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             Log.d(TAG, "LiveTranslationService connected")
             val localBinder = binder as? LiveTranslationService.LocalBinder
-            translationService = localBinder?.getService()
+            translationService = localBinder?.service
             isBound = true
             observeService()
         }
