@@ -23,7 +23,7 @@ class GoogleSpeechDetector(private val context: Context) {
 
             val data = GoogleEndpointerData(bytes)
             val modelId = data.endpointerModelId
-            val idealBuffer = data.idealBufferBytes
+            val idealBuffer = data.idealBufferBytes()
             Log.i(TAG, "GoogleEndpointer initialized: modelId=$modelId, idealBufferBytes=$idealBuffer")
 
             endpointerData = data
