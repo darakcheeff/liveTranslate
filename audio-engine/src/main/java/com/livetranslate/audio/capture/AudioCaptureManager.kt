@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
-import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
@@ -52,7 +52,7 @@ class AudioCaptureManager(
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
     private var currentMode = TranslationMode.DIALOGUE
-    private var pcmFileOutputStream: FileOutputStream? = null
+    private var wavFileWriterRaf: RandomAccessFile? = null
 
     fun setDucking(enabled: Boolean) {
         if (currentMode == TranslationMode.DIALOGUE) {
@@ -94,10 +94,11 @@ class AudioCaptureManager(
 
             try {
                 context?.let { ctx ->
-                    val pcmFile = File(ctx.cacheDir, "last_recorded_audio.pcm")
-                    pcmFileOutputStream = FileOutputStream(pcmFile)
+                    val wavFile = File(ctx.cacheDir, "input_mic.wav")
+                    wavFileWriterRaf = WavFileWriter.createWavFile(wavFile, SAMPLE_RATE, 1)
+                    Log.i(TAG, "Dumping input mic WAV to: ${wavFile.absolutePath}")
                 }
-            } catch (e: Exception) { Log.w(TAG, "Could not open PCM debug dump file") }
+            } catch (e: Exception) { Log.w(TAG, "Could not open WAV debug dump file", e) }
 
             record.startRecording()
             isRecording.set(true)
@@ -119,7 +120,9 @@ class AudioCaptureManager(
                         val rms = calculateRms(buffer, readBytes)
                         _waveformRmsFlow.emit(rms.toFloat())
 
-                        try { pcmFileOutputStream?.write(buffer, 0, readBytes) } catch (e: Exception) {}
+                        wavFileWriterRaf?.let { raf ->
+                            WavFileWriter.appendPcmData(raf, buffer, 0, readBytes)
+                        }
 
                         if (isDucking.get()) continue
 
@@ -224,7 +227,13 @@ class AudioCaptureManager(
 
     fun stopCapture() {
         isRecording.set(false)
-        try { pcmFileOutputStream?.flush(); pcmFileOutputStream?.close(); pcmFileOutputStream = null } catch (e: Exception) {}
+        try {
+            wavFileWriterRaf?.let { raf ->
+                WavFileWriter.finalizeWavFile(raf, SAMPLE_RATE, 1)
+                wavFileWriterRaf = null
+            }
+        } catch (e: Exception) {}
+
         try {
             echoCanceler?.release(); echoCanceler = null
             noiseSuppressor?.release(); noiseSuppressor = null

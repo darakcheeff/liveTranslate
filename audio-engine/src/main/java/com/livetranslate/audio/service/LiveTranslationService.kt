@@ -67,7 +67,7 @@ class LiveTranslationService : Service() {
 
         webSocketClient = GeminiLiveWebSocketClient(config)
         audioCapture = AudioCaptureManager(this)
-        audioPlayback = AudioPlaybackManager()
+        audioPlayback = AudioPlaybackManager(this)
 
         audioFocus = AudioFocusManager(
             context = this,

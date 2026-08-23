@@ -1,15 +1,20 @@
 package com.livetranslate.audio.playback
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
+import com.livetranslate.audio.capture.WavFileWriter
 import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
+import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AudioPlaybackManager(
+    private val context: Context? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
@@ -24,6 +29,7 @@ class AudioPlaybackManager(
     private var audioTrack: AudioTrack? = null
     private val isPlaying = AtomicBoolean(false)
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
+    private var wavFileWriterRaf: RandomAccessFile? = null
 
     var onPlaybackActiveChanged: ((Boolean) -> Unit)? = null
 
@@ -42,7 +48,7 @@ class AudioPlaybackManager(
             .build()
 
         val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        val bufferSize = maxOf(minBufferSize * 2, 3200 * 16) // Generous native buffer to eliminate glitching
+        val bufferSize = maxOf(minBufferSize * 2, 3200 * 16)
 
         try {
             audioTrack = AudioTrack.Builder()
@@ -55,6 +61,17 @@ class AudioPlaybackManager(
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
             isPlaying.set(true)
+
+            try {
+                context?.let { ctx ->
+                    val wavFile = File(ctx.cacheDir, "output_translation.wav")
+                    wavFileWriterRaf = WavFileWriter.createWavFile(wavFile, SAMPLE_RATE, 1)
+                    Log.i(TAG, "Dumping output translation WAV to: ${wavFile.absolutePath}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not initialize output WAV writer", e)
+            }
+
             Log.i(TAG, "AudioTrack initialized with JitterBuffer ($JITTER_BUFFER_MIN_CHUNKS chunks) in mode: ${mode.name}")
             startPlaybackLoop()
             return true
@@ -67,6 +84,10 @@ class AudioPlaybackManager(
     fun enqueueAudioChunk(pcmChunk: ByteArray) {
         val boostedChunk = applyDigitalGain(pcmChunk, DIGITAL_GAIN_FACTOR)
         audioQueue.offer(boostedChunk)
+
+        wavFileWriterRaf?.let { raf ->
+            WavFileWriter.appendPcmData(raf, boostedChunk)
+        }
     }
 
     fun flushAndInterrupt() {
@@ -93,7 +114,6 @@ class AudioPlaybackManager(
                         emptyCycles = 0
                         onPlaybackActiveChanged?.invoke(true)
                     } else if (audioQueue.isNotEmpty() && emptyCycles > 10) {
-                        // Flushed remaining chunks even if < min buffer after brief wait
                         isBuffering = false
                         emptyCycles = 0
                         onPlaybackActiveChanged?.invoke(true)
@@ -110,7 +130,7 @@ class AudioPlaybackManager(
                     emptyCycles = 0
                 } else {
                     emptyCycles++
-                    if (emptyCycles >= 15) { // 150ms of silence -> mark playback idle and reset buffer
+                    if (emptyCycles >= 15) {
                         isBuffering = true
                         onPlaybackActiveChanged?.invoke(false)
                     }
@@ -123,6 +143,14 @@ class AudioPlaybackManager(
     fun release() {
         isPlaying.set(false)
         audioQueue.clear()
+
+        try {
+            wavFileWriterRaf?.let { raf ->
+                WavFileWriter.finalizeWavFile(raf, SAMPLE_RATE, 1)
+                wavFileWriterRaf = null
+            }
+        } catch (e: Exception) {}
+
         try {
             audioTrack?.stop()
             audioTrack?.release()
