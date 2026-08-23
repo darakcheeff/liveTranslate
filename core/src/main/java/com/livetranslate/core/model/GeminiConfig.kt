@@ -26,7 +26,8 @@ data class GeminiConfig(
     companion object {
         val DEFAULT_MODELS = listOf(
             "models/gemini-2.0-flash-exp",
-            "models/gemini-2.0-flash-realtime-exp"
+            "models/gemini-2.0-flash-realtime-exp",
+            "models/gemini-2.0-flash"
         )
     }
 

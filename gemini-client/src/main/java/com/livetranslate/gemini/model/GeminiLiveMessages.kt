@@ -15,13 +15,13 @@ data class RealtimeInputMessage(
 @Serializable
 data class SetupConfig(
     val model: String,
-    val generationConfig: GenerationConfig? = null,
+    val generationConfig: GenerationConfig,
     val systemInstruction: Content? = null
 )
 
 @Serializable
 data class GenerationConfig(
-    val responseModalities: List<String> = listOf("AUDIO"),
+    val responseModalities: List<String>,
     val speechConfig: SpeechConfig? = null
 )
 
