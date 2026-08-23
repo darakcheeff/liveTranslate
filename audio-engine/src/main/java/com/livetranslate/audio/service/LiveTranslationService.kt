@@ -61,9 +61,10 @@ class LiveTranslationService : Service() {
     private lateinit var audioPlayback: AudioPlaybackManager
     private lateinit var audioFocus: AudioFocusManager
 
-    // Twin WebSocket clients for continuous zero-gap SOLO conveyor translation
+    // Triple WebSocket clients for seamless zero-gap, zero-starvation conveyor pipeline
     private lateinit var clientA: GeminiLiveWebSocketClient
     private lateinit var clientB: GeminiLiveWebSocketClient
+    private lateinit var clientC: GeminiLiveWebSocketClient
     private lateinit var modelDiscovery: GeminiModelDiscovery
 
     private var activeMode = TranslationMode.DIALOGUE
@@ -75,6 +76,7 @@ class LiveTranslationService : Service() {
 
     private val channelA = Channel<PhraseTask>(capacity = Channel.UNLIMITED)
     private val channelB = Channel<PhraseTask>(capacity = Channel.UNLIMITED)
+    private val channelC = Channel<PhraseTask>(capacity = Channel.UNLIMITED)
     private val readyResultsMap = ConcurrentHashMap<Int, PhraseResult>()
     private var phraseCounter = 0
 
@@ -84,7 +86,7 @@ class LiveTranslationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Service onCreate (Twin-Engine with Ordered Sequencer)")
+        Log.i(TAG, "Service onCreate (Triple-Engine with Ordered Sequencer)")
         prefsManager = EncryptedPreferencesManager(this)
         audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager(this)
@@ -96,6 +98,7 @@ class LiveTranslationService : Service() {
         val initialConfig = prefsManager.loadConfig()
         clientA = GeminiLiveWebSocketClient(initialConfig)
         clientB = GeminiLiveWebSocketClient(initialConfig)
+        clientC = GeminiLiveWebSocketClient(initialConfig)
         modelDiscovery = GeminiModelDiscovery()
 
         audioPlayback.onPlaybackActiveChanged = { isPlaying ->
@@ -133,14 +136,16 @@ class LiveTranslationService : Service() {
     fun updateConfig(config: GeminiConfig) {
         clientA.updateConfig(config)
         clientB.updateConfig(config)
+        clientC.updateConfig(config)
     }
 
     fun startTranslation(mode: TranslationMode) {
         activeMode = mode
         val config = prefsManager.loadConfig()
-        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name} (Twin Engine Ordered)")
+        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name} (Triple-Engine Ordered)")
         clientA.updateConfig(config)
         clientB.updateConfig(config)
+        clientC.updateConfig(config)
 
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
@@ -182,6 +187,7 @@ class LiveTranslationService : Service() {
                     prefsManager.saveConfig(updatedConfig)
                     clientA.updateConfig(updatedConfig)
                     clientB.updateConfig(updatedConfig)
+                    clientC.updateConfig(updatedConfig)
                 }
             }
         }
@@ -189,6 +195,7 @@ class LiveTranslationService : Service() {
         clientA.startSession(mode)
         if (mode == TranslationMode.SOLO) {
             clientB.startSession(mode)
+            clientC.startSession(mode)
         }
     }
 
@@ -196,6 +203,7 @@ class LiveTranslationService : Service() {
         Log.i(TAG, "stopTranslation called")
         clientA.stopSession()
         clientB.stopSession()
+        clientC.stopSession()
         audioCapture.stopCapture()
         audioPlayback.release()
         audioFocus.abandonAudioFocus()
@@ -238,18 +246,25 @@ class LiveTranslationService : Service() {
             }
         }
 
-        // Conveyor phrase dispatcher for SOLO mode (alternates between Channel A and Channel B)
+        // Triple-Engine Conveyor phrase dispatcher for SOLO mode
         serviceScope.launch {
             audioCapture.completedPhraseFlow.collect { phrasePcm ->
                 if (activeMode == TranslationMode.SOLO) {
                     val index = phraseCounter++
                     val task = PhraseTask(index, phrasePcm)
-                    if (index % 2 == 0) {
-                        Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker A")
-                        channelA.trySend(task)
-                    } else {
-                        Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker B")
-                        channelB.trySend(task)
+                    when (index % 3) {
+                        0 -> {
+                            Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker A")
+                            channelA.trySend(task)
+                        }
+                        1 -> {
+                            Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker B")
+                            channelB.trySend(task)
+                        }
+                        else -> {
+                            Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker C")
+                            channelC.trySend(task)
+                        }
                     }
                 }
             }
@@ -268,6 +283,14 @@ class LiveTranslationService : Service() {
             for (task in channelB) {
                 if (activeMode != TranslationMode.SOLO) continue
                 processPhraseWithClient(clientB, "Worker-B", task)
+            }
+        }
+
+        // Worker C
+        serviceScope.launch(Dispatchers.IO) {
+            for (task in channelC) {
+                if (activeMode != TranslationMode.SOLO) continue
+                processPhraseWithClient(clientC, "Worker-C", task)
             }
         }
 
@@ -343,7 +366,7 @@ class LiveTranslationService : Service() {
                     }
                     nextIndex++
                 } else {
-                    delay(20)
+                    delay(15)
                 }
             }
         }
