@@ -132,10 +132,10 @@ class AudioPlaybackManager(
                 // Rate-limit speed changes to once per 2 seconds with deadband hysteresis to prevent stuttering
                 if (now - lastSpeedChangeTime > 2000L) {
                     val targetSpeed = when {
-                        queueSize > 20 -> 1.25f   // Heavy backlog -> 25% faster
-                        queueSize > 12 -> 1.15f   // Moderate backlog -> 15% faster
-                        queueSize < 4  -> 1.00f   // Caught up -> normal speed
-                        else           -> currentPlaybackSpeed
+                        queueSize > 250 -> 1.20f   // Heavy backlog (> 10 seconds of speech in queue) -> gently catch up
+                        queueSize > 150 -> 1.10f   // Moderate backlog (> 6 seconds)
+                        queueSize < 25  -> 0.95f   // Running low on buffer -> slightly stretch to preserve seamless continuity
+                        else            -> 1.00f   // Normal natural human speed
                     }
 
                     if (Math.abs(currentPlaybackSpeed - targetSpeed) > 0.04f) {
