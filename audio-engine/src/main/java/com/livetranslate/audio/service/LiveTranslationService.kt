@@ -160,7 +160,8 @@ class LiveTranslationService : Service() {
                     webSocketClient.sendAudioChunk(chunk)
                     delay(80)
                 }
-                Log.i(TAG, "Finished injecting PCM speech. Waiting for Gemini audio translation...")
+                webSocketClient.sendTurnComplete()
+                Log.i(TAG, "Finished injecting PCM speech. Sent turnComplete. Waiting for Gemini audio translation...")
             } else {
                 Log.e(TAG, "No PCM audio file found for injection test!")
             }

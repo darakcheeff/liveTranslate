@@ -68,5 +68,12 @@
                 <action android:name="com.livetranslate.action.SET_API_KEY" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".TestInjectionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.livetranslate.action.TEST_PCM" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
