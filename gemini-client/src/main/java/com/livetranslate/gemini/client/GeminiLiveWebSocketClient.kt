@@ -122,7 +122,14 @@ class GeminiLiveWebSocketClient(
                 sendInitialSetup(webSocket, activeModel)
             }
 
+            override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
+                val text = bytes.utf8()
+                Log.i(TAG, "RAW INCOMING (BYTES) MSG: " + text.take(300))
+                handleIncomingMessage(text)
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.i(TAG, "RAW INCOMING (TEXT) MSG: " + text.take(300))
                 Log.i(TAG, "RAW INCOMING MSG: $text")
                 handleIncomingMessage(text)
             }

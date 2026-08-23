@@ -14,8 +14,8 @@ class PromptBuilderTest {
             ourLanguageCode = "ru",
             opponentLanguageCode = "en"
         )
-        assertTrue(prompt.contains(Language.findByCode("en").name))
-        assertTrue(prompt.contains(Language.findByCode("ru").name))
+        assertTrue(prompt.contains(Language.findByCode("en").nativeName))
+        assertTrue(prompt.contains(Language.findByCode("ru").nativeName))
     }
 
     @Test
@@ -26,7 +26,7 @@ class PromptBuilderTest {
             opponentLanguageCode = "zh"
         )
         assertTrue(prompt.contains("bidirectional"))
-        assertTrue(prompt.contains(Language.findByCode("ru").name))
-        assertTrue(prompt.contains(Language.findByCode("zh").name))
+        assertTrue(prompt.contains(Language.findByCode("ru").nativeName))
+        assertTrue(prompt.contains(Language.findByCode("zh").nativeName))
     }
 }

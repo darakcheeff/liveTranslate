@@ -1,7 +1,9 @@
 package com.livetranslate.audio.service
 
 import android.annotation.SuppressLint
-import android.app.*
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -24,6 +26,8 @@ import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
+import java.io.FileInputStream
 import java.util.UUID
 
 class LiveTranslationService : Service() {
@@ -32,6 +36,7 @@ class LiveTranslationService : Service() {
         private const val TAG = "LiveTranslationService"
         const val ACTION_START = "com.livetranslate.action.START"
         const val ACTION_STOP = "com.livetranslate.action.STOP"
+        const val ACTION_INJECT_TEST = "com.livetranslate.action.INJECT_TEST"
         const val EXTRA_MODE = "extra_mode"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "live_translate_service_channel"
@@ -94,6 +99,7 @@ class LiveTranslationService : Service() {
         when (action) {
             ACTION_START -> startTranslation(mode)
             ACTION_STOP -> stopTranslation()
+            ACTION_INJECT_TEST -> runPcmInjectionTest()
         }
         return START_NOT_STICKY
     }
@@ -106,6 +112,7 @@ class LiveTranslationService : Service() {
         activeMode = mode
         val config = prefsManager.loadConfig()
         Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name}")
+        webSocketClient.updateConfig(config)
 
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
@@ -119,12 +126,40 @@ class LiveTranslationService : Service() {
                 val discoveryResult = modelDiscovery.fetchLiveCapableModels(activeKey)
                 discoveryResult.onSuccess { models ->
                     Log.i(TAG, "Updating config with discovered models: $models")
-                    val updatedConfig = config.copy(preferredModels = models)
+                    val updatedConfig = prefsManager.loadConfig().copy(preferredModels = models)
                     prefsManager.saveConfig(updatedConfig)
                     webSocketClient.updateConfig(updatedConfig)
                 }
             }
             webSocketClient.startSession(mode)
+        }
+    }
+
+    fun runPcmInjectionTest() {
+        Log.i(TAG, "Starting Automated PCM Injection Test on Phone...")
+        startTranslation(TranslationMode.DIALOGUE)
+
+        serviceScope.launch(Dispatchers.IO) {
+            delay(1500) // Wait for WebSocket handshake
+            var pcmFile = File(cacheDir, "last_recorded_audio.pcm")
+            if (!pcmFile.exists() || pcmFile.length() == 0L) {
+                pcmFile = File("/data/local/tmp/user_speech.pcm")
+            }
+
+            if (pcmFile.exists() && pcmFile.length() > 0L) {
+                Log.i(TAG, "Injecting PCM file: ${pcmFile.absolutePath} (${pcmFile.length()} bytes)")
+                val bytes = pcmFile.readBytes()
+                val chunkSize = 3200
+                for (i in 0 until bytes.size step chunkSize) {
+                    val end = minOf(i + chunkSize, bytes.size)
+                    val chunk = bytes.copyOfRange(i, end)
+                    webSocketClient.sendAudioChunk(chunk)
+                    delay(80)
+                }
+                Log.i(TAG, "Finished injecting PCM speech. Waiting for Gemini audio translation...")
+            } else {
+                Log.e(TAG, "No PCM audio file found for injection test!")
+            }
         }
     }
 
