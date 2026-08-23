@@ -2,7 +2,6 @@ package com.livetranslate.gemini.client
 
 import android.util.Base64
 import android.util.Log
-import com.livetranslate.core.model.ConnectionState
 import com.livetranslate.core.model.GeminiConfig
 import com.livetranslate.core.model.TranslationMode
 import com.livetranslate.gemini.failover.FailoverResult
@@ -23,6 +22,15 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
+sealed class ConnectionState {
+    object Idle : ConnectionState()
+    data class Connecting(val model: String, val keyIndex: Int) : ConnectionState()
+    data class Connected(val model: String, val keyIndex: Int) : ConnectionState()
+    data class RotatingKey(val reason: String, val newKeyIndex: Int) : ConnectionState()
+    data class FallbackModel(val fromModel: String, val toModel: String) : ConnectionState()
+    data class Error(val message: String, val isRecoverable: Boolean) : ConnectionState()
+}
+
 class GeminiLiveWebSocketClient(
     private var config: GeminiConfig,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -33,70 +41,59 @@ class GeminiLiveWebSocketClient(
 
     private val json = Json {
         ignoreUnknownKeys = true
-        encodeDefaults = false
-        explicitNulls = false
+        encodeDefaults = true
+        isLenient = true
     }
 
-    private val keyPoolManager = KeyPoolManager(config)
-
-    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-
-    private val _incomingAudioFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
-    val incomingAudioFlow: SharedFlow<ByteArray> = _incomingAudioFlow.asSharedFlow()
-
-    private val _subtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val subtitleFlow: SharedFlow<String> = _subtitleFlow.asSharedFlow()
-
-    private val _interruptedFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
-    val interruptedFlow: SharedFlow<Unit> = _interruptedFlow.asSharedFlow()
-
-    private var okHttpClient: OkHttpClient = OkHttpClient.Builder()
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .build()
 
+    private var keyPoolManager = KeyPoolManager(config)
     private var activeWebSocket: WebSocket? = null
     private var currentMode: TranslationMode = TranslationMode.SOLO
     private val isManualStop = AtomicBoolean(false)
     private val isConnectingOrConnected = AtomicBoolean(false)
     private val chunksSentCount = AtomicInteger(0)
 
+    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    private val _incomingAudioFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 256)
+    val incomingAudioFlow: SharedFlow<ByteArray> = _incomingAudioFlow.asSharedFlow()
+
+    private val _subtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    val subtitleFlow: SharedFlow<String> = _subtitleFlow.asSharedFlow()
+
+    private val _interruptedFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val interruptedFlow: SharedFlow<Unit> = _interruptedFlow.asSharedFlow()
+
     fun updateConfig(newConfig: GeminiConfig) {
         this.config = newConfig
-        keyPoolManager.updateConfig(newConfig)
+        this.keyPoolManager = KeyPoolManager(newConfig)
     }
 
-    @Synchronized
-    fun startSession(mode: TranslationMode) {
+    fun startSession(mode: TranslationMode = TranslationMode.SOLO) {
+        Log.i(TAG, "Starting Live session in mode: ${mode.name}")
+        this.currentMode = mode
+        isManualStop.set(false)
+
         if (isConnectingOrConnected.get()) {
             Log.w(TAG, "Session already active/connecting, skipping duplicate start")
             return
         }
-        currentMode = mode
-        isManualStop.set(false)
-        isConnectingOrConnected.set(true)
-        chunksSentCount.set(0)
-        keyPoolManager.resetModelIndex()
-        Log.i(TAG, "Starting Live session in mode: ${mode.name}")
+
         connectInternal()
     }
 
-    @Synchronized
-    fun stopSession() {
-        Log.i(TAG, "Stopping Live session manually")
-        isManualStop.set(true)
-        isConnectingOrConnected.set(false)
-        activeWebSocket?.close(1000, "Session stopped by user")
-        activeWebSocket = null
-        _connectionState.value = ConnectionState.Disconnected
-    }
-
     private fun connectInternal() {
+        isConnectingOrConnected.set(true)
         val apiKey = keyPoolManager.getActiveApiKey()
         if (apiKey.isNullOrBlank()) {
-            val err = "Список API-ключей пуст. Добавьте ключ в настройках."
+            val err = "Ключ API не настроен"
             Log.e(TAG, err)
             isConnectingOrConnected.set(false)
             _connectionState.value = ConnectionState.Error(err, isRecoverable = false)
@@ -123,15 +120,11 @@ class GeminiLiveWebSocketClient(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
-                val text = bytes.utf8()
-                Log.i(TAG, "RAW INCOMING (BYTES) MSG: " + text.take(300))
-                handleIncomingMessage(text)
+                handleIncomingMessageSync(bytes.utf8())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.i(TAG, "RAW INCOMING (TEXT) MSG: " + text.take(300))
-                Log.i(TAG, "RAW INCOMING MSG: $text")
-                handleIncomingMessage(text)
+                handleIncomingMessageSync(text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -175,6 +168,9 @@ class GeminiLiveWebSocketClient(
                                 voiceName = config.selectedVoice.apiName
                             )
                         )
+                    ),
+                    thinkingConfig = ThinkingConfig(
+                        thinkingBudget = 0
                     )
                 ),
                 systemInstruction = Content(
@@ -187,8 +183,6 @@ class GeminiLiveWebSocketClient(
         Log.i(TAG, "Sending setup message: $jsonString")
         webSocket.send(jsonString)
     }
-
-
 
     fun sendAudioChunk(pcmChunk: ByteArray) {
         val ws = activeWebSocket ?: return
@@ -217,36 +211,33 @@ class GeminiLiveWebSocketClient(
         }
     }
 
-    private fun handleIncomingMessage(text: String) {
-        scope.launch {
-            try {
-                val response = json.decodeFromString<BidiServerMessage>(text)
-                val serverContent = response.serverContent ?: return@launch
+    private fun handleIncomingMessageSync(text: String) {
+        try {
+            val response = json.decodeFromString<BidiServerMessage>(text)
+            val serverContent = response.serverContent ?: return
 
-                if (serverContent.interrupted) {
-                    Log.i(TAG, "Received interrupted signal from Gemini")
-                    _interruptedFlow.emit(Unit)
-                }
-
-                serverContent.modelTurn?.parts?.forEach { part ->
-                    part.inlineData?.let { blob ->
-                        if (blob.data.isNotEmpty()) {
-                            val audioBytes = Base64.decode(blob.data, Base64.DEFAULT)
-                            Log.i(TAG, "Received AUDIO from Gemini: ${audioBytes.size} bytes! Playing...")
-                            _incomingAudioFlow.emit(audioBytes)
-                        }
-                    }
-
-                    part.text?.let { txt ->
-                        if (txt.isNotBlank()) {
-                            Log.i(TAG, "Received SUBTITLE text: $txt")
-                            _subtitleFlow.emit(txt)
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error parsing server message: $text", e)
+            if (serverContent.interrupted) {
+                Log.i(TAG, "Received interrupted signal from Gemini")
+                _interruptedFlow.tryEmit(Unit)
             }
+
+            serverContent.modelTurn?.parts?.forEach { part ->
+                part.inlineData?.let { blob ->
+                    if (blob.data.isNotEmpty()) {
+                        val audioBytes = Base64.decode(blob.data, Base64.DEFAULT)
+                        _incomingAudioFlow.tryEmit(audioBytes)
+                    }
+                }
+
+                part.text?.let { txt ->
+                    if (txt.isNotBlank() && !txt.startsWith("**Translating") && !txt.startsWith("**Completing")) {
+                        Log.i(TAG, "Received SUBTITLE text: $txt")
+                        _subtitleFlow.tryEmit(txt)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing server message: $text", e)
         }
     }
 
@@ -287,5 +278,15 @@ class GeminiLiveWebSocketClient(
                 )
             }
         }
+    }
+
+    fun stopSession() {
+        Log.i(TAG, "Stopping Live session manually")
+        isManualStop.set(true)
+        isConnectingOrConnected.set(false)
+        activeWebSocket?.close(1000, "User stopped session")
+        activeWebSocket = null
+        chunksSentCount.set(0)
+        _connectionState.value = ConnectionState.Idle
     }
 }

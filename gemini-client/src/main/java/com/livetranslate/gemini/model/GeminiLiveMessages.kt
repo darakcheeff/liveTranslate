@@ -22,7 +22,13 @@ data class SetupConfig(
 @Serializable
 data class GenerationConfig(
     val responseModalities: List<String>,
-    val speechConfig: SpeechConfig? = null
+    val speechConfig: SpeechConfig? = null,
+    val thinkingConfig: ThinkingConfig? = null
+)
+
+@Serializable
+data class ThinkingConfig(
+    val thinkingBudget: Int = 0
 )
 
 @Serializable
@@ -97,7 +103,6 @@ data class GeminiModelItem(
     val description: String? = null,
     val supportedGenerationMethods: List<String> = emptyList()
 )
-
 
 @Serializable
 data class ClientContentMessage(
