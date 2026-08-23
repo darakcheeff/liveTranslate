@@ -66,6 +66,9 @@ class GeminiLiveWebSocketClient(
     private val _turnCompleteFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val turnCompleteFlow: SharedFlow<Unit> = _turnCompleteFlow.asSharedFlow()
 
+    private val _interruptedFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val interruptedFlow: SharedFlow<Unit> = _interruptedFlow.asSharedFlow()
+
     suspend fun waitForTurnComplete(timeoutMs: Long = 6000) {
         withTimeoutOrNull(timeoutMs) {
             turnCompleteFlow.first()
