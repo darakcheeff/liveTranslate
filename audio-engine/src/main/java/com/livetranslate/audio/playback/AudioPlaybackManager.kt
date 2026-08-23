@@ -8,8 +8,6 @@ import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.max
-import kotlin.math.min
 
 class AudioPlaybackManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -19,7 +17,8 @@ class AudioPlaybackManager(
         const val SAMPLE_RATE = 24000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        const val DIGITAL_GAIN_FACTOR = 2.2f // 220% digital gain boost for loud and crisp speech
+        const val DIGITAL_GAIN_FACTOR = 2.0f // 200% digital gain boost
+        const val JITTER_BUFFER_MIN_CHUNKS = 3 // 120ms pre-buffering to prevent network packet underrun jitter
     }
 
     private var audioTrack: AudioTrack? = null
@@ -31,7 +30,6 @@ class AudioPlaybackManager(
     fun initialize(mode: TranslationMode): Boolean {
         release()
 
-        // Use USAGE_MEDIA so playback comes out loud and clear through the main loudspeaker or headphones
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -44,7 +42,7 @@ class AudioPlaybackManager(
             .build()
 
         val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        val bufferSize = maxOf(minBufferSize, 3200 * 8)
+        val bufferSize = maxOf(minBufferSize * 2, 3200 * 16) // Generous native buffer to eliminate glitching
 
         try {
             audioTrack = AudioTrack.Builder()
@@ -57,7 +55,7 @@ class AudioPlaybackManager(
             audioTrack?.setVolume(1.0f)
             audioTrack?.play()
             isPlaying.set(true)
-            Log.i(TAG, "AudioTrack initialized on loudspeaker with gain boost $DIGITAL_GAIN_FACTOR in mode: ${mode.name}")
+            Log.i(TAG, "AudioTrack initialized with JitterBuffer ($JITTER_BUFFER_MIN_CHUNKS chunks) in mode: ${mode.name}")
             startPlaybackLoop()
             return true
         } catch (e: Exception) {
@@ -69,7 +67,6 @@ class AudioPlaybackManager(
     fun enqueueAudioChunk(pcmChunk: ByteArray) {
         val boostedChunk = applyDigitalGain(pcmChunk, DIGITAL_GAIN_FACTOR)
         audioQueue.offer(boostedChunk)
-        Log.d(TAG, "Enqueued ${pcmChunk.size} bytes (boosted) for playback")
     }
 
     fun flushAndInterrupt() {
@@ -86,18 +83,37 @@ class AudioPlaybackManager(
 
     private fun startPlaybackLoop() {
         scope.launch {
-            var chunksPlayed = 0
+            var isBuffering = true
+            var emptyCycles = 0
+
             while (isPlaying.get() && isActive) {
+                if (isBuffering) {
+                    if (audioQueue.size >= JITTER_BUFFER_MIN_CHUNKS) {
+                        isBuffering = false
+                        emptyCycles = 0
+                        onPlaybackActiveChanged?.invoke(true)
+                    } else if (audioQueue.isNotEmpty() && emptyCycles > 10) {
+                        // Flushed remaining chunks even if < min buffer after brief wait
+                        isBuffering = false
+                        emptyCycles = 0
+                        onPlaybackActiveChanged?.invoke(true)
+                    } else {
+                        emptyCycles++
+                        delay(10)
+                        continue
+                    }
+                }
+
                 val chunk = audioQueue.poll()
                 if (chunk != null) {
-                    onPlaybackActiveChanged?.invoke(true)
-                    val written = audioTrack?.write(chunk, 0, chunk.size) ?: 0
-                    chunksPlayed++
-                    if (chunksPlayed % 10 == 0) {
-                        Log.d(TAG, "Played $chunksPlayed audio chunks ($written bytes written)")
-                    }
+                    audioTrack?.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
+                    emptyCycles = 0
                 } else {
-                    onPlaybackActiveChanged?.invoke(false)
+                    emptyCycles++
+                    if (emptyCycles >= 15) { // 150ms of silence -> mark playback idle and reset buffer
+                        isBuffering = true
+                        onPlaybackActiveChanged?.invoke(false)
+                    }
                     delay(10)
                 }
             }
