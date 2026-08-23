@@ -22,6 +22,7 @@ import com.livetranslate.core.security.EncryptedPreferencesManager
 import com.livetranslate.gemini.client.GeminiLiveWebSocketClient
 import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -155,10 +156,48 @@ class LiveTranslationService : Service() {
         audioCapture.startCapture(activeMode)
     }
 
+    private val soloPhraseChannel = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+
     private fun observeStreams() {
         serviceScope.launch {
             audioCapture.audioChunkFlow.collect { pcmChunk ->
-                webSocketClient.sendAudioChunk(pcmChunk)
+                if (activeMode == TranslationMode.DIALOGUE) {
+                    webSocketClient.sendAudioChunk(pcmChunk)
+                }
+            }
+        }
+
+        serviceScope.launch {
+            audioCapture.completedPhraseFlow.collect { phrasePcm ->
+                if (activeMode == TranslationMode.SOLO) {
+                    soloPhraseChannel.trySend(phrasePcm)
+                }
+            }
+        }
+
+        // Dedicated translation conveyor worker for SOLO mode
+        serviceScope.launch(Dispatchers.IO) {
+            for (phrasePcm in soloPhraseChannel) {
+                if (activeMode != TranslationMode.SOLO) continue
+
+                Log.i(TAG, "Conveyor: Processing phrase (${phrasePcm.size} bytes) -> sending to Gemini")
+                webSocketClient.sendActivityStart()
+
+                val chunkSize = 3200
+                var offset = 0
+                while (offset < phrasePcm.size) {
+                    val len = minOf(chunkSize, phrasePcm.size - offset)
+                    val chunk = phrasePcm.copyOfRange(offset, offset + len)
+                    webSocketClient.sendAudioChunk(chunk)
+                    offset += len
+                    delay(5)
+                }
+
+                webSocketClient.sendActivityEnd()
+
+                Log.d(TAG, "Conveyor: Awaiting Gemini turn completion...")
+                webSocketClient.waitForTurnComplete(timeoutMs = 7000)
+                Log.i(TAG, "Conveyor: Gemini turn complete! Proceeding to next phrase in queue.")
             }
         }
 
@@ -175,18 +214,6 @@ class LiveTranslationService : Service() {
                 } else {
                     Log.d(TAG, "SOLO mode: preserving audio playback during background speech recording")
                 }
-            }
-        }
-
-        serviceScope.launch {
-            audioCapture.soloActivityStartFlow.collect {
-                webSocketClient.sendActivityStart()
-            }
-        }
-
-        serviceScope.launch {
-            audioCapture.soloActivityEndFlow.collect {
-                webSocketClient.sendActivityEnd()
             }
         }
 

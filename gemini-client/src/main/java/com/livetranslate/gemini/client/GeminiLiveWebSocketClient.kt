@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.*
@@ -62,8 +63,14 @@ class GeminiLiveWebSocketClient(
     private val _subtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val subtitleFlow: SharedFlow<String> = _subtitleFlow.asSharedFlow()
 
-    private val _interruptedFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
-    val interruptedFlow: SharedFlow<Unit> = _interruptedFlow.asSharedFlow()
+    private val _turnCompleteFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val turnCompleteFlow: SharedFlow<Unit> = _turnCompleteFlow.asSharedFlow()
+
+    suspend fun waitForTurnComplete(timeoutMs: Long = 6000) {
+        withTimeoutOrNull(timeoutMs) {
+            turnCompleteFlow.first()
+        }
+    }
 
     fun updateConfig(newConfig: GeminiConfig) {
         this.config = newConfig
@@ -250,9 +257,15 @@ class GeminiLiveWebSocketClient(
             val response = json.decodeFromString<BidiServerMessage>(text)
             val serverContent = response.serverContent ?: return
 
+            if (serverContent.turnComplete) {
+                Log.i(TAG, "Received turnComplete from Gemini (turn finished)")
+                _turnCompleteFlow.tryEmit(Unit)
+            }
+
             if (serverContent.interrupted) {
                 Log.i(TAG, "Received interrupted signal from Gemini")
                 _interruptedFlow.tryEmit(Unit)
+                _turnCompleteFlow.tryEmit(Unit) // unblock conveyor if interrupted
             }
 
             serverContent.modelTurn?.parts?.forEach { part ->

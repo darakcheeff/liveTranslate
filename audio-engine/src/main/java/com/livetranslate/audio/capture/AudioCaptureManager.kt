@@ -8,11 +8,13 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.util.Log
+import com.google.speech.micro.GoogleEndpointer
 import com.livetranslate.core.model.TranslationMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,21 +36,21 @@ class AudioCaptureManager(
         const val WINDOW_SIZE = 30                    // 3.0s sliding window for ambient noise floor
     }
 
+    // Direct streaming flow (used in DIALOGUE mode)
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
     val audioChunkFlow: SharedFlow<ByteArray> = _audioChunkFlow.asSharedFlow()
+
+    // Completed phrase queue flow (used for continuous SOLO conveyor pipeline)
+    private val _completedPhraseFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 32)
+    val completedPhraseFlow: SharedFlow<ByteArray> = _completedPhraseFlow.asSharedFlow()
 
     private val _waveformRmsFlow = MutableSharedFlow<Float>(extraBufferCapacity = 16)
     val waveformRmsFlow: SharedFlow<Float> = _waveformRmsFlow.asSharedFlow()
 
-    private val _soloActivityStartFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
-    val soloActivityStartFlow: SharedFlow<Unit> = _soloActivityStartFlow.asSharedFlow()
-
-    private val _soloActivityEndFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
-    val soloActivityEndFlow: SharedFlow<Unit> = _soloActivityEndFlow.asSharedFlow()
-
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
+    private var googleSpeechDetector: GoogleSpeechDetector? = null
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
     private var currentMode = TranslationMode.DIALOGUE
@@ -92,6 +94,16 @@ class AudioCaptureManager(
                 Log.d(TAG, "NoiseSuppressor enabled")
             }
 
+            context?.let { ctx ->
+                val detector = GoogleSpeechDetector(ctx)
+                if (detector.initialize()) {
+                    googleSpeechDetector = detector
+                    Log.i(TAG, "Google Endpointer engine loaded successfully")
+                } else {
+                    googleSpeechDetector = null
+                }
+            }
+
             try {
                 context?.let { ctx ->
                     val wavFile = File(ctx.cacheDir, "input_mic.wav")
@@ -113,6 +125,7 @@ class AudioCaptureManager(
                 var tickCounter = 0
                 val ambientNoiseWindow = ArrayDeque<Double>(WINDOW_SIZE + 2)
                 val preSpeechRingBuffer = ArrayDeque<ByteArray>(6)
+                val currentPhraseStream = ByteArrayOutputStream(CHUNK_SIZE_BYTES * 60)
                 var currentAmbientFloor = 35.0
 
                 while (isRecording.get() && isActive) {
@@ -130,8 +143,18 @@ class AudioCaptureManager(
                         val currentChunk = buffer.copyOf(readBytes)
                         tickCounter++
 
-                        // ONLY update ambient noise floor when NOT speaking!
-                        // This prevents loud speech from contaminating the baseline noise floor.
+                        // Google Neural Endpointer processing if available
+                        var neuralSpeechStart = false
+                        var neuralSpeechEnd = false
+                        googleSpeechDetector?.let { detector ->
+                            val result = detector.processAudio(buffer, 0, readBytes)
+                            if (result != null) {
+                                if (result.isSpeechStart) neuralSpeechStart = true
+                                if (result.isSpeechEnd) neuralSpeechEnd = true
+                            }
+                        }
+
+                        // Baseline acoustic noise floor estimation (updated only in silence)
                         if (!isInConfirmedSpeech) {
                             if (ambientNoiseWindow.size >= WINDOW_SIZE) ambientNoiseWindow.removeFirst()
                             ambientNoiseWindow.addLast(rms)
@@ -145,12 +168,15 @@ class AudioCaptureManager(
                         val silenceThreshold = maxOf(32.0, currentAmbientFloor * 1.2)
 
                         if (tickCounter % 30 == 0) {
-                            Log.d(TAG, "VAD: RMS=%.1f, AmbientFloor=%.1f, SpeechThresh=%.1f, SilThresh=%.1f, Speaking=%b, SentChunks=%d".format(
-                                rms, currentAmbientFloor, speechThreshold, silenceThreshold, isInConfirmedSpeech, totalSpeechChunksSent
+                            Log.d(TAG, "VAD: RMS=%.1f, AmbientFloor=%.1f, SpeechThresh=%.1f, SilThresh=%.1f, Speaking=%b, SentChunks=%d, NeuralEngine=%b".format(
+                                rms, currentAmbientFloor, speechThreshold, silenceThreshold, isInConfirmedSpeech, totalSpeechChunksSent, googleSpeechDetector != null
                             ))
                         }
 
-                        if (rms >= speechThreshold) {
+                        val isSpeechDetected = neuralSpeechStart || (rms >= speechThreshold)
+                        val isSilenceDetected = neuralSpeechEnd || (rms < silenceThreshold)
+
+                        if (isSpeechDetected) {
                             consecutiveSpeechChunks++
                             consecutiveSilenceChunks = 0
 
@@ -158,51 +184,69 @@ class AudioCaptureManager(
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
 
-                                if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS) {
+                                if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS || neuralSpeechStart) {
                                     isInConfirmedSpeech = true
                                     totalSpeechChunksSent = 0
-                                    Log.i(TAG, "VAD: >>> PHRASE START <<< (RMS=%.1f, Floor=%.1f, Thresh=%.1f)".format(
-                                        rms, currentAmbientFloor, speechThreshold
+                                    currentPhraseStream.reset()
+
+                                    Log.i(TAG, "VAD: >>> PHRASE START <<< (RMS=%.1f, Floor=%.1f, Neural=%b)".format(
+                                        rms, currentAmbientFloor, neuralSpeechStart
                                     ))
-                                    if (currentMode == TranslationMode.SOLO) {
-                                        _soloActivityStartFlow.emit(Unit)
-                                    }
+
                                     while (preSpeechRingBuffer.isNotEmpty()) {
-                                        _audioChunkFlow.emit(preSpeechRingBuffer.removeFirst())
+                                        val preChunk = preSpeechRingBuffer.removeFirst()
+                                        currentPhraseStream.write(preChunk)
+                                        if (currentMode == TranslationMode.DIALOGUE) {
+                                            _audioChunkFlow.emit(preChunk)
+                                        }
                                         totalSpeechChunksSent++
                                     }
                                 }
                             } else {
-                                _audioChunkFlow.emit(currentChunk)
+                                currentPhraseStream.write(currentChunk)
+                                if (currentMode == TranslationMode.DIALOGUE) {
+                                    _audioChunkFlow.emit(currentChunk)
+                                }
                                 totalSpeechChunksSent++
 
-                                // In SOLO mode: limit continuous phrases to ~4.5 seconds for 100% verbatim translation
+                                // Max segment cutoff for 100% verbatim translation in SOLO conveyor
                                 if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
-                                    Log.i(TAG, "VAD (SOLO): 4.5s phrase complete ($totalSpeechChunksSent chunks). Emitting activityEnd.")
-                                    _soloActivityEndFlow.emit(Unit)
-                                    totalSpeechChunksSent = 0
-                                    // Remain in speech mode but start new segment turn seamlessly
-                                    _soloActivityStartFlow.emit(Unit)
+                                    val completedPcm = currentPhraseStream.toByteArray()
+                                    if (completedPcm.isNotEmpty()) {
+                                        Log.i(TAG, "VAD (SOLO): 4.5s phrase chunk complete (${completedPcm.size} bytes). Enqueueing to conveyor.")
+                                        _completedPhraseFlow.emit(completedPcm)
+                                        currentPhraseStream.reset()
+                                        totalSpeechChunksSent = 0
+                                    }
                                 }
                             }
-                        } else if (rms < silenceThreshold) {
+                        } else if (isSilenceDetected) {
                             consecutiveSpeechChunks = 0
                             if (isInConfirmedSpeech) {
                                 consecutiveSilenceChunks++
-                                if (consecutiveSilenceChunks <= PAUSE_SILENCE_CHUNKS) {
-                                    _audioChunkFlow.emit(currentChunk)
+                                if (consecutiveSilenceChunks <= PAUSE_SILENCE_CHUNKS && !neuralSpeechEnd) {
+                                    currentPhraseStream.write(currentChunk)
+                                    if (currentMode == TranslationMode.DIALOGUE) {
+                                        _audioChunkFlow.emit(currentChunk)
+                                    }
                                     totalSpeechChunksSent++
                                 } else {
-                                    // 300ms pause confirmed -> sentence boundary detected
+                                    // Phrase ended at natural pause
                                     isInConfirmedSpeech = false
                                     consecutiveSilenceChunks = 0
                                     totalSpeechChunksSent = 0
                                     preSpeechRingBuffer.clear()
-                                    Log.i(TAG, "VAD: <<< PHRASE PAUSE (300ms) >>> (RMS=%.1f, Floor=%.1f)".format(
-                                        rms, currentAmbientFloor
+
+                                    val completedPcm = currentPhraseStream.toByteArray()
+                                    currentPhraseStream.reset()
+
+                                    Log.i(TAG, "VAD: <<< PHRASE PAUSE (${completedPcm.size} bytes) >>> (RMS=%.1f, Neural=%b)".format(
+                                        rms, neuralSpeechEnd
                                     ))
-                                    if (currentMode == TranslationMode.SOLO) {
-                                        _soloActivityEndFlow.emit(Unit)
+
+                                    if (currentMode == TranslationMode.SOLO && completedPcm.size >= CHUNK_SIZE_BYTES * 3) {
+                                        Log.i(TAG, "VAD (SOLO): Phrase complete (${completedPcm.size} bytes). Enqueueing to conveyor.")
+                                        _completedPhraseFlow.emit(completedPcm)
                                     }
                                 }
                             } else {
@@ -210,10 +254,13 @@ class AudioCaptureManager(
                                 preSpeechRingBuffer.addLast(currentChunk)
                             }
                         } else {
-                            // Hysteresis zone (between silence and speech threshold)
+                            // Hysteresis zone
                             consecutiveSpeechChunks = 0
                             if (isInConfirmedSpeech) {
-                                _audioChunkFlow.emit(currentChunk)
+                                currentPhraseStream.write(currentChunk)
+                                if (currentMode == TranslationMode.DIALOGUE) {
+                                    _audioChunkFlow.emit(currentChunk)
+                                }
                                 totalSpeechChunksSent++
                             } else {
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
@@ -233,6 +280,11 @@ class AudioCaptureManager(
 
     fun stopCapture() {
         isRecording.set(false)
+        try {
+            googleSpeechDetector?.close()
+            googleSpeechDetector = null
+        } catch (e: Exception) {}
+
         try {
             wavFileWriterRaf?.let { raf ->
                 WavFileWriter.finalizeWavFile(raf, SAMPLE_RATE, 1)
