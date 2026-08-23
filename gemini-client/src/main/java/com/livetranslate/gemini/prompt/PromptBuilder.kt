@@ -1,7 +1,7 @@
 package com.livetranslate.gemini.prompt
 
-import com.livetranslate.core.model.Language
 import com.livetranslate.core.model.TranslationMode
+import com.livetranslate.core.model.LanguageCodeMapper
 
 object PromptBuilder {
 
@@ -10,22 +10,23 @@ object PromptBuilder {
         ourLanguageCode: String,
         opponentLanguageCode: String
     ): String {
-        val ourLang = Language.findByCode(ourLanguageCode).nativeName
-        val oppLang = Language.findByCode(opponentLanguageCode).nativeName
+        val ourName = LanguageCodeMapper.getEnglishLanguageName(ourLanguageCode)
+        val oppName = LanguageCodeMapper.getEnglishLanguageName(opponentLanguageCode)
 
         return when (mode) {
             TranslationMode.SOLO -> """
-You are a real-time speech-to-speech interpreter from $oppLang to $ourLang.
-CRITICAL: Speak ONLY the translated speech in $ourLang.
-Never explain, never describe what you are doing, never output markdown or notes. Speak ONLY the translated words.
-""".trimIndent()
+                You are a real-time speech interpreter translating spoken input into $oppName.
+                - Translate all incoming speech directly and accurately into $oppName.
+                - Speak ONLY the translated words.
+                - Never output commentary, notes, explanations, or system messages.
+            """.trimIndent()
 
             TranslationMode.DIALOGUE -> """
-You are a real-time bidirectional speech interpreter between $ourLang and $oppLang.
-- If input is in $ourLang, speak ONLY the direct translation in $oppLang.
-- If input is in $oppLang, speak ONLY the direct translation in $ourLang.
-CRITICAL: Speak ONLY the translated words. Never output commentary, introductions, or explanations.
-""".trimIndent()
+                You are a real-time bidirectional speech interpreter between $ourName and $oppName.
+                - If input is in $ourName, speak ONLY the direct translation in $oppName.
+                - If input is in $oppName, speak ONLY the direct translation in $ourName.
+                CRITICAL: Speak ONLY the translated words. Never output commentary, explanations, or metadata.
+            """.trimIndent()
         }
     }
 }

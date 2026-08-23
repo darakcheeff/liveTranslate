@@ -28,8 +28,8 @@ class AudioCaptureManager(
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono
         const val VAD_SPEECH_RMS_THRESHOLD = 30.0
-        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm real speech
-        const val TRAILING_SILENCE_CHUNKS = 8 // 800 ms of trailing silence to let Gemini server VAD trigger turn
+        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm speech
+        const val TRAILING_SILENCE_CHUNKS = 5 // 500 ms of trailing silence to trigger Gemini VAD
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -105,7 +105,7 @@ class AudioCaptureManager(
                 var consecutiveSilenceChunks = 0
                 var isInConfirmedSpeech = false
                 var totalSpeechChunksSent = 0
-                val preSpeechRingBuffer = ArrayDeque<ByteArray>(3)
+                val preSpeechRingBuffer = ArrayDeque<ByteArray>(6)
 
                 while (isRecording.get() && isActive) {
                     val readBytes = record.read(buffer, 0, CHUNK_SIZE_BYTES)
@@ -128,14 +128,14 @@ class AudioCaptureManager(
                             consecutiveSilenceChunks = 0
 
                             if (!isInConfirmedSpeech) {
-                                if (preSpeechRingBuffer.size >= 2) preSpeechRingBuffer.removeFirst()
+                                if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
 
                                 if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS) {
                                     isInConfirmedSpeech = true
                                     totalSpeechChunksSent = 0
                                     Log.d(TAG, "VAD: Confirmed speech started (RMS: $rms)")
-                                    // Flush initial pre-speech frames
+                                    // Flush 500ms pre-speech baseline frames to calibrate Gemini noise floor
                                     while (preSpeechRingBuffer.isNotEmpty()) {
                                         _audioChunkFlow.emit(preSpeechRingBuffer.removeFirst())
                                         totalSpeechChunksSent++
@@ -160,7 +160,7 @@ class AudioCaptureManager(
                                     Log.d(TAG, "VAD: Speech completed after $totalSpeechChunksSent chunks. Emitted trailing silence to trigger Gemini translation.")
                                 }
                             } else {
-                                if (preSpeechRingBuffer.size >= 2) preSpeechRingBuffer.removeFirst()
+                                if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
                                 preSpeechRingBuffer.addLast(currentChunk)
                             }
                         }
