@@ -27,7 +27,8 @@ class AudioCaptureManager(
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono
-        const val VAD_SPEECH_RMS_THRESHOLD = 20.0
+        const val VAD_SPEECH_RMS_THRESHOLD = 30.0
+        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm real speech
         const val TRAILING_SILENCE_CHUNKS = 4 // 400 ms of trailing silence before ending turn
     }
 
@@ -42,8 +43,9 @@ class AudioCaptureManager(
     private var noiseSuppressor: NoiseSuppressor? = null
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
-    var onSpeechEnded: (() -> Unit)? = null
     private var pcmFileOutputStream: FileOutputStream? = null
+
+    var onSpeechEnded: (() -> Unit)? = null
 
     fun setDucking(enabled: Boolean) {
         isDucking.set(enabled)
@@ -100,9 +102,11 @@ class AudioCaptureManager(
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
-                var isUserSpeaking = false
-                var silenceChunksCount = 0
-                var totalChunksEmitted = 0
+                var consecutiveSpeechChunks = 0
+                var consecutiveSilenceChunks = 0
+                var isInConfirmedSpeech = false
+                var totalSpeechChunksSent = 0
+                val preSpeechRingBuffer = ArrayDeque<ByteArray>(3)
 
                 while (isRecording.get() && isActive) {
                     val readBytes = record.read(buffer, 0, CHUNK_SIZE_BYTES)
@@ -115,26 +119,48 @@ class AudioCaptureManager(
                         } catch (e: Exception) {}
 
                         if (isDucking.get()) {
-                            // Suppress mic input during translated speech playback
                             continue
                         }
 
+                        val currentChunk = buffer.copyOf(readBytes)
+
                         if (rms >= VAD_SPEECH_RMS_THRESHOLD) {
-                            isUserSpeaking = true
-                            silenceChunksCount = 0
-                            val chunkCopy = buffer.copyOf(readBytes)
-                            _audioChunkFlow.emit(chunkCopy)
-                            totalChunksEmitted++
-                        } else if (isUserSpeaking) {
-                            silenceChunksCount++
-                            if (silenceChunksCount <= TRAILING_SILENCE_CHUNKS) {
-                                val chunkCopy = buffer.copyOf(readBytes)
-                                _audioChunkFlow.emit(chunkCopy)
-                                totalChunksEmitted++
+                            consecutiveSpeechChunks++
+                            consecutiveSilenceChunks = 0
+
+                            if (!isInConfirmedSpeech) {
+                                if (preSpeechRingBuffer.size >= 2) preSpeechRingBuffer.removeFirst()
+                                preSpeechRingBuffer.addLast(currentChunk)
+
+                                if (consecutiveSpeechChunks >= MIN_CONSECUTIVE_SPEECH_CHUNKS) {
+                                    isInConfirmedSpeech = true
+                                    totalSpeechChunksSent = 0
+                                    Log.d(TAG, "VAD: Confirmed speech started (RMS: $rms)")
+                                    // Flush initial pre-speech frames
+                                    while (preSpeechRingBuffer.isNotEmpty()) {
+                                        _audioChunkFlow.emit(preSpeechRingBuffer.removeFirst())
+                                        totalSpeechChunksSent++
+                                    }
+                                }
                             } else {
-                                isUserSpeaking = false
-                                onSpeechEnded?.invoke()
-                                Log.d(TAG, "VAD: Speech pause detected after $totalChunksEmitted chunks. Pausing mic stream to trigger Gemini translation turn.")
+                                _audioChunkFlow.emit(currentChunk)
+                                totalSpeechChunksSent++
+                            }
+                        } else {
+                            consecutiveSpeechChunks = 0
+                            if (isInConfirmedSpeech) {
+                                consecutiveSilenceChunks++
+                                if (consecutiveSilenceChunks <= TRAILING_SILENCE_CHUNKS) {
+                                    _audioChunkFlow.emit(currentChunk)
+                                    totalSpeechChunksSent++
+                                } else {
+                                    isInConfirmedSpeech = false
+                                    Log.d(TAG, "VAD: Speech completed after $totalSpeechChunksSent chunks. Triggering turnComplete.")
+                                    onSpeechEnded?.invoke()
+                                }
+                            } else {
+                                if (preSpeechRingBuffer.size >= 2) preSpeechRingBuffer.removeFirst()
+                                preSpeechRingBuffer.addLast(currentChunk)
                             }
                         }
                     }
