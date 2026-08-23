@@ -1,6 +1,7 @@
 package com.livetranslate.audio.capture
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -11,10 +12,13 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 class AudioCaptureManager(
+    private val context: Context? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
@@ -36,6 +40,7 @@ class AudioCaptureManager(
     private var noiseSuppressor: NoiseSuppressor? = null
     private val isRecording = AtomicBoolean(false)
     private var isDucking = AtomicBoolean(false)
+    private var pcmFileOutputStream: FileOutputStream? = null
 
     fun setDucking(enabled: Boolean) {
         isDucking.set(enabled)
@@ -77,6 +82,15 @@ class AudioCaptureManager(
                 Log.d(TAG, "NoiseSuppressor enabled")
             }
 
+            try {
+                context?.let { ctx ->
+                    val pcmFile = File(ctx.cacheDir, "last_recorded_audio.pcm")
+                    pcmFileOutputStream = FileOutputStream(pcmFile)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not open PCM debug dump file: ${e.message}")
+            }
+
             record.startRecording()
             isRecording.set(true)
             Log.i(TAG, "AudioRecord capture started successfully")
@@ -90,7 +104,10 @@ class AudioCaptureManager(
                         val rms = calculateRms(buffer, readBytes)
                         _waveformRmsFlow.emit(rms.toFloat())
 
-                        // Stream all captured chunks to Gemini Live API
+                        try {
+                            pcmFileOutputStream?.write(buffer, 0, readBytes)
+                        } catch (e: Exception) {}
+
                         val chunkCopy = buffer.copyOf(readBytes)
                         _audioChunkFlow.emit(chunkCopy)
                         chunkCount++
@@ -110,6 +127,12 @@ class AudioCaptureManager(
 
     fun stopCapture() {
         isRecording.set(false)
+        try {
+            pcmFileOutputStream?.flush()
+            pcmFileOutputStream?.close()
+            pcmFileOutputStream = null
+        } catch (e: Exception) {}
+
         try {
             echoCanceler?.release()
             echoCanceler = null

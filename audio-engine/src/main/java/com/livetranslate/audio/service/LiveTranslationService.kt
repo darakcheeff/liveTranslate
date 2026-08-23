@@ -20,6 +20,7 @@ import com.livetranslate.core.model.HistoryItem
 import com.livetranslate.core.model.TranslationMode
 import com.livetranslate.core.security.EncryptedPreferencesManager
 import com.livetranslate.gemini.client.GeminiLiveWebSocketClient
+import com.livetranslate.gemini.discovery.GeminiModelDiscovery
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +45,7 @@ class LiveTranslationService : Service() {
     private lateinit var audioCapture: AudioCaptureManager
     private lateinit var audioPlayback: AudioPlaybackManager
     private lateinit var audioFocus: AudioFocusManager
+    private val modelDiscovery = GeminiModelDiscovery()
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -62,7 +64,7 @@ class LiveTranslationService : Service() {
         val config = prefsManager.loadConfig()
 
         webSocketClient = GeminiLiveWebSocketClient(config)
-        audioCapture = AudioCaptureManager()
+        audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager()
 
         audioFocus = AudioFocusManager(
@@ -104,14 +106,26 @@ class LiveTranslationService : Service() {
         activeMode = mode
         val config = prefsManager.loadConfig()
         Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name}")
-        webSocketClient.updateConfig(config)
 
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
-
         audioPlayback.initialize(mode)
         audioCapture.startCapture()
-        webSocketClient.startSession(mode)
+
+        // Discover supported models dynamically for the active API key
+        serviceScope.launch {
+            val activeKey = config.getActiveApiKey()
+            if (!activeKey.isNullOrBlank()) {
+                val discoveryResult = modelDiscovery.fetchLiveCapableModels(activeKey)
+                discoveryResult.onSuccess { models ->
+                    Log.i(TAG, "Updating config with discovered models: $models")
+                    val updatedConfig = config.copy(preferredModels = models)
+                    prefsManager.saveConfig(updatedConfig)
+                    webSocketClient.updateConfig(updatedConfig)
+                }
+            }
+            webSocketClient.startSession(mode)
+        }
     }
 
     fun stopTranslation() {
