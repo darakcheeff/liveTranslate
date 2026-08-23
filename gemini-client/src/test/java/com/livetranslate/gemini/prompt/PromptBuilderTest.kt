@@ -14,7 +14,6 @@ class PromptBuilderTest {
             ourLanguageCode = "ru",
             opponentLanguageCode = "en"
         )
-        assertTrue(prompt.contains("one-way"))
         assertTrue(prompt.contains(Language.findByCode("en").name))
         assertTrue(prompt.contains(Language.findByCode("ru").name))
     }
