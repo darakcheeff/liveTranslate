@@ -31,8 +31,8 @@ class AudioCaptureManager(
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200  // 100 ms per chunk
         const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2   // 200 ms to confirm speech start
-        const val PAUSE_SILENCE_CHUNKS = 2            // 200 ms of silence = natural sentence pause
-        const val SOLO_MAX_SEGMENT_CHUNKS = 25        // 2.5s max phrase length for rapid verbatim translation
+        const val PAUSE_SILENCE_CHUNKS = 4            // 400 ms of silence = natural sentence pause
+        const val SOLO_MAX_SEGMENT_CHUNKS = 75        // 7.5s safety limit for uninterrupted monologue
         const val WINDOW_SIZE = 30                    // 3.0s sliding window for ambient noise floor
     }
 
@@ -125,7 +125,7 @@ class AudioCaptureManager(
                 var tickCounter = 0
                 val ambientNoiseWindow = ArrayDeque<Double>(WINDOW_SIZE + 2)
                 val preSpeechRingBuffer = ArrayDeque<ByteArray>(6)
-                val currentPhraseStream = ByteArrayOutputStream(CHUNK_SIZE_BYTES * 60)
+                val currentPhraseStream = ByteArrayOutputStream(CHUNK_SIZE_BYTES * 80)
                 var currentAmbientFloor = 35.0
 
                 while (isRecording.get() && isActive) {
@@ -209,11 +209,11 @@ class AudioCaptureManager(
                                 }
                                 totalSpeechChunksSent++
 
-                                // Max segment cutoff for 100% verbatim translation in SOLO conveyor
+                                // Safety cutoff for long uninterrupted monologues (7.5 seconds)
                                 if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
                                     val completedPcm = currentPhraseStream.toByteArray()
                                     if (completedPcm.isNotEmpty()) {
-                                        Log.i(TAG, "VAD (SOLO): 4.5s phrase chunk complete (${completedPcm.size} bytes). Enqueueing to conveyor.")
+                                        Log.i(TAG, "VAD (SOLO): 7.5s safety phrase chunk complete (${completedPcm.size} bytes). Enqueueing.")
                                         _completedPhraseFlow.emit(completedPcm)
                                         currentPhraseStream.reset()
                                         totalSpeechChunksSent = 0
@@ -231,7 +231,7 @@ class AudioCaptureManager(
                                     }
                                     totalSpeechChunksSent++
                                 } else {
-                                    // Phrase ended at natural pause
+                                    // Complete sentence boundary detected at 400ms pause
                                     isInConfirmedSpeech = false
                                     consecutiveSilenceChunks = 0
                                     totalSpeechChunksSent = 0
@@ -240,12 +240,12 @@ class AudioCaptureManager(
                                     val completedPcm = currentPhraseStream.toByteArray()
                                     currentPhraseStream.reset()
 
-                                    Log.i(TAG, "VAD: <<< PHRASE PAUSE (${completedPcm.size} bytes) >>> (RMS=%.1f, Neural=%b)".format(
+                                    Log.i(TAG, "VAD: <<< SENTENCE COMPLETE (${completedPcm.size} bytes) >>> (RMS=%.1f, Neural=%b)".format(
                                         rms, neuralSpeechEnd
                                     ))
 
-                                    if (currentMode == TranslationMode.SOLO && completedPcm.size >= CHUNK_SIZE_BYTES * 3) {
-                                        Log.i(TAG, "VAD (SOLO): Phrase complete (${completedPcm.size} bytes). Enqueueing to conveyor.")
+                                    if (currentMode == TranslationMode.SOLO && completedPcm.size >= CHUNK_SIZE_BYTES * 10) {
+                                        Log.i(TAG, "VAD (SOLO): Complete sentence enqueued (${completedPcm.size} bytes).")
                                         _completedPhraseFlow.emit(completedPcm)
                                     }
                                 }
