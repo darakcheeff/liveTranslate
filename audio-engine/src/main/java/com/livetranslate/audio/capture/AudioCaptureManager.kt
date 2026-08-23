@@ -209,11 +209,11 @@ class AudioCaptureManager(
                                 }
                                 totalSpeechChunksSent++
 
-                                // Safety cutoff for long uninterrupted monologues (7.5 seconds)
-                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
+                                // Safety cutoff for long monologues: wait for micro-pause/breath before cutting
+                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS && (isSilenceDetected || rms < currentSpeechThreshold)) {
                                     val completedPcm = currentPhraseStream.toByteArray()
                                     if (completedPcm.isNotEmpty()) {
-                                        Log.i(TAG, "VAD (SOLO): 7.5s safety phrase chunk complete (${completedPcm.size} bytes). Enqueueing.")
+                                        Log.i(TAG, "VAD (SOLO): Safe breath-pause chunk complete (${completedPcm.size} bytes). Enqueueing.")
                                         _completedPhraseFlow.emit(completedPcm)
                                         currentPhraseStream.reset()
                                         totalSpeechChunksSent = 0
@@ -231,7 +231,7 @@ class AudioCaptureManager(
                                     }
                                     totalSpeechChunksSent++
                                 } else {
-                                    // Complete sentence boundary detected at 400ms pause
+                                    // Complete sentence boundary detected at natural pause
                                     isInConfirmedSpeech = false
                                     consecutiveSilenceChunks = 0
                                     totalSpeechChunksSent = 0
@@ -244,7 +244,7 @@ class AudioCaptureManager(
                                         rms, neuralSpeechEnd
                                     ))
 
-                                    if (currentMode == TranslationMode.SOLO && completedPcm.size >= CHUNK_SIZE_BYTES * 10) {
+                                    if (currentMode == TranslationMode.SOLO && completedPcm.size >= CHUNK_SIZE_BYTES * 3) {
                                         Log.i(TAG, "VAD (SOLO): Complete sentence enqueued (${completedPcm.size} bytes).")
                                         _completedPhraseFlow.emit(completedPcm)
                                     }
