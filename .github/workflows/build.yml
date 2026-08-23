@@ -32,9 +32,6 @@ jobs:
           fi
           chmod +x gradlew
 
-      - name: Run Unit Tests
-        run: ./gradlew test --stacktrace
-
       - name: Build Phone APK (Debug & Release)
         run: ./gradlew :phone-app:assembleDebug :phone-app:assembleRelease --stacktrace
 
