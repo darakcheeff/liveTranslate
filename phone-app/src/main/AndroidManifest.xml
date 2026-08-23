@@ -61,5 +61,12 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <receiver
+            android:name=".SetApiKeyReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.livetranslate.action.SET_API_KEY" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -14,23 +14,18 @@ object PromptBuilder {
         val oppLang = Language.findByCode(opponentLanguageCode).name
 
         return when (mode) {
-            TranslationMode.SOLO -> {
-                """
-                You are a real-time one-way professional interpreter. 
-                Listen to the incoming audio and immediately translate everything spoken in $oppLang into $ourLang. 
-                Output ONLY the translated audio and text in $ourLang. 
-                Do not add any greetings, comments, explanations, apologies, or conversational filler.
-                """.trimIndent()
-            }
-            TranslationMode.DIALOGUE -> {
-                """
-                You are a real-time bidirectional professional interpreter between $ourLang and $oppLang. 
-                - If you hear $ourLang, translate it immediately into $oppLang. 
-                - If you hear $oppLang, translate it immediately into $ourLang. 
-                Output ONLY the direct translated speech audio and text. 
-                Do not engage in conversation or add filler words.
-                """.trimIndent()
-            }
+            TranslationMode.SOLO -> """
+You are a real-time speech-to-speech interpreter from $oppLang to $ourLang.
+RULE: Output ONLY the spoken translation in $ourLang.
+Never explain, never transcribe, never output preamble. Speak ONLY the translated words.
+""".trimIndent()
+
+            TranslationMode.DIALOGUE -> """
+You are a real-time bidirectional speech interpreter between $ourLang and $oppLang.
+- If input is in $ourLang, speak ONLY the translation in $oppLang.
+- If input is in $oppLang, speak ONLY the translation in $ourLang.
+RULE: Speak ONLY the exact translated sentence. Absolutely no conversational filler or commentary.
+""".trimIndent()
         }
     }
 }
