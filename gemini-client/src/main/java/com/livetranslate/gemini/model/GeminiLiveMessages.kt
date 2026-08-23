@@ -3,9 +3,13 @@ package com.livetranslate.gemini.model
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class BidiClientMessage(
-    val setup: SetupConfig? = null,
-    val realtimeInput: RealtimeInput? = null
+data class SetupMessage(
+    val setup: SetupConfig
+)
+
+@Serializable
+data class RealtimeInputMessage(
+    val realtimeInput: RealtimeInput
 )
 
 @Serializable
@@ -38,20 +42,18 @@ data class PrebuiltVoiceConfig(
 
 @Serializable
 data class Content(
-    val role: String? = null,
     val parts: List<Part>
 )
 
 @Serializable
 data class Part(
-    val text: String? = null,
-    val inlineData: Blob? = null
+    val text: String
 )
 
 @Serializable
 data class Blob(
     val mimeType: String,
-    val data: String // Base64 encoded
+    val data: String
 )
 
 @Serializable
@@ -59,7 +61,6 @@ data class RealtimeInput(
     val mediaChunks: List<Blob>
 )
 
-// Incoming server messages
 @Serializable
 data class BidiServerMessage(
     val serverContent: ServerContent? = null
@@ -67,12 +68,22 @@ data class BidiServerMessage(
 
 @Serializable
 data class ServerContent(
-    val modelTurn: Content? = null,
+    val modelTurn: ServerContentModelTurn? = null,
     val turnComplete: Boolean = false,
     val interrupted: Boolean = false
 )
 
-// Models discovery response
+@Serializable
+data class ServerContentModelTurn(
+    val parts: List<ServerContentPart> = emptyList()
+)
+
+@Serializable
+data class ServerContentPart(
+    val text: String? = null,
+    val inlineData: Blob? = null
+)
+
 @Serializable
 data class ModelsListResponse(
     val models: List<GeminiModelItem> = emptyList(),
