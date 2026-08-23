@@ -21,27 +21,28 @@ enum class VoiceName(val apiName: String, val genderDescription: String) {
 data class Language(
     val code: String,
     val name: String,
-    val nativeName: String
+    val nativeName: String,
+    val englishName: String = name
 ) {
     companion object {
         val SUPPORTED_LANGUAGES = listOf(
-            Language("ru", "Русский", "Русский"),
-            Language("en", "Английский", "English"),
-            Language("kk", "Казахский", "Қазақша"),
-            Language("zh", "Китайский", "中文"),
-            Language("es", "Испанский", "Español"),
-            Language("de", "Немецкий", "Deutsch"),
-            Language("fr", "Французский", "Français"),
-            Language("it", "Итальянский", "Italiano"),
-            Language("tr", "Турецкий", "Türkçe"),
-            Language("ar", "Арабский", "العربية"),
-            Language("ja", "Японский", "日本語"),
-            Language("ko", "Корейский", "한국어")
+            Language("ru", "Русский", "Русский", "Russian"),
+            Language("en", "Английский", "English", "English"),
+            Language("kk", "Казахский", "Қазақша", "Kazakh"),
+            Language("zh", "Китайский", "中文", "Chinese"),
+            Language("es", "Испанский", "Español", "Spanish"),
+            Language("de", "Немецкий", "Deutsch", "German"),
+            Language("fr", "Французский", "Français", "French"),
+            Language("it", "Итальянский", "Italiano", "Italian"),
+            Language("tr", "Турецкий", "Türkçe", "Turkish"),
+            Language("ar", "Арабский", "العربية", "Arabic"),
+            Language("ja", "Японский", "日本語", "Japanese"),
+            Language("ko", "Корейский", "한국어", "Korean")
         )
 
         fun findByCode(code: String): Language {
             return SUPPORTED_LANGUAGES.find { it.code.equals(code, ignoreCase = true) }
-                ?: Language(code, code, code)
+                ?: Language(code, code, code, code)
         }
     }
 }

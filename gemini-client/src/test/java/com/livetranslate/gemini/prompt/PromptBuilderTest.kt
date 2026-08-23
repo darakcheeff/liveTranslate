@@ -1,7 +1,7 @@
 package com.livetranslate.gemini.prompt
 
+import com.livetranslate.core.model.Language
 import com.livetranslate.core.model.TranslationMode
-import com.livetranslate.core.model.LanguageCodeMapper
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,7 +14,7 @@ class PromptBuilderTest {
             ourLanguageCode = "ru",
             opponentLanguageCode = "en"
         )
-        assertTrue(prompt.contains(LanguageCodeMapper.getEnglishLanguageName("en")))
+        assertTrue(prompt.contains(Language.findByCode("en").englishName))
     }
 
     @Test
@@ -25,7 +25,7 @@ class PromptBuilderTest {
             opponentLanguageCode = "zh"
         )
         assertTrue(prompt.contains("bidirectional"))
-        assertTrue(prompt.contains(LanguageCodeMapper.getEnglishLanguageName("ru")))
-        assertTrue(prompt.contains(LanguageCodeMapper.getEnglishLanguageName("zh")))
+        assertTrue(prompt.contains(Language.findByCode("ru").englishName))
+        assertTrue(prompt.contains(Language.findByCode("zh").englishName))
     }
 }
