@@ -206,17 +206,24 @@ class GeminiLiveWebSocketClient(
     }
 
 
-    fun sendTurnComplete() {
+    fun sendActivityEnd() {
         val ws = activeWebSocket ?: return
         if (_connectionState.value !is ConnectionState.Connected) return
         try {
-            val msg = json.encodeToString(ClientContentMessage(ClientContent(turnComplete = true)))
+            // For native audio models, use realtimeInput.activityEnd (NOT clientContent.turnComplete)
+            // clientContent.turnComplete causes 1007 "invalid argument" on native audio models
+            val msg = json.encodeToString(
+                RealtimeInputMessage(
+                    realtimeInput = RealtimeInput(activityEnd = ActivityEnd())
+                )
+            )
             ws.send(msg)
-            Log.d(TAG, "Sent turnComplete to Gemini")
+            Log.d(TAG, "Sent activityEnd to Gemini (signals end of audio input turn)")
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending turnComplete", e)
+            Log.e(TAG, "Error sending activityEnd", e)
         }
     }
+
 
     private fun handleIncomingMessageSync(text: String) {
         try {

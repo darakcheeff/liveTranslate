@@ -62,10 +62,17 @@ data class Blob(
     val data: String
 )
 
+// For native audio streaming models: signals end of one audio turn
+// Use realtimeInput.activityEnd instead of clientContent.turnComplete
+// clientContent.turnComplete causes 1007 error on native audio models
 @Serializable
 data class RealtimeInput(
-    val mediaChunks: List<Blob>
+    val mediaChunks: List<Blob>? = null,
+    val activityEnd: ActivityEnd? = null
 )
+
+@Serializable
+class ActivityEnd  // empty object {}
 
 @Serializable
 data class BidiServerMessage(
@@ -102,14 +109,4 @@ data class GeminiModelItem(
     val displayName: String? = null,
     val description: String? = null,
     val supportedGenerationMethods: List<String> = emptyList()
-)
-
-@Serializable
-data class ClientContentMessage(
-    val clientContent: ClientContent
-)
-
-@Serializable
-data class ClientContent(
-    val turnComplete: Boolean = true
 )

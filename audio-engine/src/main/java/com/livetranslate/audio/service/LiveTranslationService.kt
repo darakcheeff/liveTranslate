@@ -176,7 +176,7 @@ class LiveTranslationService : Service() {
 
         serviceScope.launch {
             audioCapture.soloSegmentCompleteFlow.collect {
-                webSocketClient.sendTurnComplete()
+                webSocketClient.sendActivityEnd()
             }
         }
 
