@@ -5,36 +5,36 @@ public class GoogleEndpointerData {
         System.loadLibrary("google_speech_micro_jni");
     }
 
-    private long nativePointer;
+    private long nativeEndpointerData;
 
     public GoogleEndpointerData(byte[] endpointerDataBytes) {
         if (endpointerDataBytes == null || endpointerDataBytes.length == 0) {
             throw new IllegalArgumentException("endpointerDataBytes must not be null or empty");
         }
-        this.nativePointer = nativeNew(endpointerDataBytes);
-        if (this.nativePointer == 0) {
+        this.nativeEndpointerData = nativeNew(endpointerDataBytes, endpointerDataBytes.length);
+        if (this.nativeEndpointerData == 0) {
             throw new IllegalStateException("Failed to create native GoogleEndpointerData");
         }
     }
 
     public long getNativePointer() {
-        return nativePointer;
+        return nativeEndpointerData;
     }
 
-    public int getIdealBufferBytes() {
-        if (nativePointer == 0) return 0;
-        return nativeIdealBufferBytes(nativePointer);
+    public int idealBufferBytes() {
+        if (nativeEndpointerData == 0) return 0;
+        return nativeIdealBufferBytes(nativeEndpointerData);
     }
 
     public String getEndpointerModelId() {
-        if (nativePointer == 0) return "";
-        return nativeGetEndpointerModelId(nativePointer);
+        if (nativeEndpointerData == 0) return "";
+        return nativeGetEndpointerModelId(nativeEndpointerData);
     }
 
     public void close() {
-        if (nativePointer != 0) {
-            nativeClose(nativePointer);
-            nativePointer = 0;
+        if (nativeEndpointerData != 0) {
+            nativeClose(nativeEndpointerData);
+            nativeEndpointerData = 0;
         }
     }
 
@@ -47,8 +47,8 @@ public class GoogleEndpointerData {
         }
     }
 
-    private static native long nativeNew(byte[] endpointerDataBytes);
-    private static native void nativeClose(long nativePointer);
-    private static native int nativeIdealBufferBytes(long nativePointer);
-    private static native String nativeGetEndpointerModelId(long nativePointer);
+    private static native long nativeNew(byte[] endpointerDataBytes, int length);
+    private static native void nativeClose(long nativeEndpointerData);
+    private static native int nativeIdealBufferBytes(long nativeEndpointerData);
+    private static native String nativeGetEndpointerModelId(long nativeEndpointerData);
 }

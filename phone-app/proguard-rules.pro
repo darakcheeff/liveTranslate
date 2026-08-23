@@ -14,3 +14,7 @@
 
 # Keep AudioFX
 -keep class android.media.audiofx.** { *; }
+
+# Keep Google Speech Micro JNI
+-keep class com.google.speech.micro.** { *; }
+-keepclassmembers class com.google.speech.micro.** { *; }

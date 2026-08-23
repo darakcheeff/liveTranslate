@@ -23,33 +23,36 @@ public class GoogleEndpointer {
         }
     }
 
-    private long nativePointer;
+    private long nativeEndpointer;
+    private GoogleEndpointerData endpointerData;
 
-    public GoogleEndpointer(GoogleEndpointerData endpointerData) {
-        if (endpointerData == null || endpointerData.getNativePointer() == 0) {
+    public GoogleEndpointer(GoogleEndpointerData data) {
+        if (data == null || data.getNativePointer() == 0) {
             throw new IllegalArgumentException("Invalid GoogleEndpointerData");
         }
-        this.nativePointer = nativeNew(endpointerData.getNativePointer());
-        if (this.nativePointer == 0) {
+        this.endpointerData = data;
+        this.nativeEndpointer = nativeNew(data);
+        if (this.nativeEndpointer == 0) {
             throw new IllegalStateException("Failed to create native GoogleEndpointer");
         }
     }
 
     public GoogleEndpointerResult process(byte[] audioBytes, int offset, int length) {
-        if (nativePointer == 0) return null;
-        return nativeProcess(nativePointer, audioBytes, offset, length);
+        if (nativeEndpointer == 0) return null;
+        return nativeProcess(nativeEndpointer, audioBytes, offset, length);
     }
 
     public void reset() {
-        if (nativePointer != 0) {
-            nativeReset(nativePointer);
+        if (nativeEndpointer != 0) {
+            nativeReset(nativeEndpointer);
         }
     }
 
     public void close() {
-        if (nativePointer != 0) {
-            nativeClose(nativePointer);
-            nativePointer = 0;
+        if (nativeEndpointer != 0) {
+            nativeClose(nativeEndpointer);
+            nativeEndpointer = 0;
+            endpointerData = null;
         }
     }
 
@@ -62,8 +65,8 @@ public class GoogleEndpointer {
         }
     }
 
-    private static native long nativeNew(long endpointerDataPointer);
-    private static native void nativeClose(long nativePointer);
-    private static native GoogleEndpointerResult nativeProcess(long nativePointer, byte[] audioBytes, int offset, int length);
-    private static native void nativeReset(long nativePointer);
+    private static native long nativeNew(GoogleEndpointerData data);
+    private static native void nativeClose(long nativeEndpointer);
+    private static native GoogleEndpointerResult nativeProcess(long nativeEndpointer, byte[] audioBytes, int offset, int length);
+    private static native void nativeReset(long nativeEndpointer);
 }
