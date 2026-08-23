@@ -205,6 +205,19 @@ class GeminiLiveWebSocketClient(
         }
     }
 
+
+    fun sendTurnComplete() {
+        val ws = activeWebSocket ?: return
+        if (_connectionState.value !is ConnectionState.Connected) return
+        try {
+            val msg = json.encodeToString(ClientContentMessage(ClientContent(turnComplete = true)))
+            ws.send(msg)
+            Log.d(TAG, "Sent turnComplete to Gemini")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending turnComplete", e)
+        }
+    }
+
     private fun handleIncomingMessageSync(text: String) {
         try {
             val response = json.decodeFromString<BidiServerMessage>(text)

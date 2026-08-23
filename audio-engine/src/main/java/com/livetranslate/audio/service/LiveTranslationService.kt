@@ -175,6 +175,12 @@ class LiveTranslationService : Service() {
         }
 
         serviceScope.launch {
+            audioCapture.soloSegmentCompleteFlow.collect {
+                webSocketClient.sendTurnComplete()
+            }
+        }
+
+        serviceScope.launch {
             webSocketClient.subtitleFlow.collect { text ->
                 val config = prefsManager.loadConfig()
                 if (config.saveHistory && text.isNotBlank()) {

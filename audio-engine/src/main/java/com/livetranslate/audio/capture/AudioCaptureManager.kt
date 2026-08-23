@@ -29,9 +29,10 @@ class AudioCaptureManager(
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         const val CHUNK_SIZE_BYTES = 3200 // 100 ms of 16kHz 16-bit Mono
         const val VAD_SPEECH_RMS_THRESHOLD = 30.0
-        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2 // 200 ms to confirm speech
-        const val TRAILING_SILENCE_CHUNKS = 5 // 500 ms of trailing silence to trigger Gemini VAD
-        const val SOLO_MAX_SEGMENT_CHUNKS = 60 // 6.0 seconds max chunk in SOLO mode for continuous lecture streaming
+        const val MIN_CONSECUTIVE_SPEECH_CHUNKS = 2
+        const val TRAILING_SILENCE_CHUNKS = 5
+        // SOLO: force a turn boundary every 5 seconds of continuous speech
+        const val SOLO_SEGMENT_CHUNKS = 50
     }
 
     private val _audioChunkFlow = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
@@ -39,6 +40,10 @@ class AudioCaptureManager(
 
     private val _waveformRmsFlow = MutableSharedFlow<Float>(extraBufferCapacity = 16)
     val waveformRmsFlow: SharedFlow<Float> = _waveformRmsFlow.asSharedFlow()
+
+    // Emits Unit every time a SOLO segment boundary should be sent (turn complete)
+    private val _soloSegmentCompleteFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val soloSegmentCompleteFlow: SharedFlow<Unit> = _soloSegmentCompleteFlow.asSharedFlow()
 
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
@@ -49,10 +54,11 @@ class AudioCaptureManager(
     private var pcmFileOutputStream: FileOutputStream? = null
 
     fun setDucking(enabled: Boolean) {
+        // In SOLO mode never duck: we want to continuously pick up speech even during playback
         if (currentMode == TranslationMode.DIALOGUE) {
             isDucking.set(enabled)
         } else {
-            isDucking.set(false) // In SOLO mode, do not duck microphone so streaming lecture audio is continuous
+            isDucking.set(false)
         }
     }
 
@@ -81,15 +87,11 @@ class AudioCaptureManager(
 
             val audioSessionId = record.audioSessionId
             if (AcousticEchoCanceler.isAvailable()) {
-                echoCanceler = AcousticEchoCanceler.create(audioSessionId)?.apply {
-                    enabled = true
-                }
+                echoCanceler = AcousticEchoCanceler.create(audioSessionId)?.apply { enabled = true }
                 Log.d(TAG, "AcousticEchoCanceler enabled")
             }
             if (NoiseSuppressor.isAvailable()) {
-                noiseSuppressor = NoiseSuppressor.create(audioSessionId)?.apply {
-                    enabled = true
-                }
+                noiseSuppressor = NoiseSuppressor.create(audioSessionId)?.apply { enabled = true }
                 Log.d(TAG, "NoiseSuppressor enabled")
             }
 
@@ -98,9 +100,7 @@ class AudioCaptureManager(
                     val pcmFile = File(ctx.cacheDir, "last_recorded_audio.pcm")
                     pcmFileOutputStream = FileOutputStream(pcmFile)
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not open PCM debug dump file: ${e.message}")
-            }
+            } catch (e: Exception) { Log.w(TAG, "Could not open PCM debug dump file") }
 
             record.startRecording()
             isRecording.set(true)
@@ -108,7 +108,6 @@ class AudioCaptureManager(
 
             scope.launch {
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
-                val silenceBuffer = ByteArray(CHUNK_SIZE_BYTES)
                 var consecutiveSpeechChunks = 0
                 var consecutiveSilenceChunks = 0
                 var isInConfirmedSpeech = false
@@ -121,13 +120,9 @@ class AudioCaptureManager(
                         val rms = calculateRms(buffer, readBytes)
                         _waveformRmsFlow.emit(rms.toFloat())
 
-                        try {
-                            pcmFileOutputStream?.write(buffer, 0, readBytes)
-                        } catch (e: Exception) {}
+                        try { pcmFileOutputStream?.write(buffer, 0, readBytes) } catch (e: Exception) {}
 
-                        if (isDucking.get()) {
-                            continue
-                        }
+                        if (isDucking.get()) continue
 
                         val currentChunk = buffer.copyOf(readBytes)
 
@@ -152,12 +147,13 @@ class AudioCaptureManager(
                                 _audioChunkFlow.emit(currentChunk)
                                 totalSpeechChunksSent++
 
-                                // In SOLO mode: auto-segment continuous speech every 6 seconds so user hears continuous stream
-                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_MAX_SEGMENT_CHUNKS) {
-                                    _audioChunkFlow.emit(silenceBuffer)
-                                    _audioChunkFlow.emit(silenceBuffer)
-                                    isInConfirmedSpeech = false
-                                    Log.d(TAG, "VAD (SOLO): Completed 6s segment. Triggered continuous stream translation.")
+                                // SOLO MODE: every 5 seconds of continuous speech, emit a turn-complete signal
+                                // so Gemini translates this segment while we continue recording the next
+                                if (currentMode == TranslationMode.SOLO && totalSpeechChunksSent >= SOLO_SEGMENT_CHUNKS) {
+                                    Log.d(TAG, "VAD (SOLO): 5s segment complete ($totalSpeechChunksSent chunks). Signalling turn complete.")
+                                    _soloSegmentCompleteFlow.emit(Unit)
+                                    // Reset counter but keep recording (do NOT set isInConfirmedSpeech=false)
+                                    totalSpeechChunksSent = 0
                                 }
                             }
                         } else {
@@ -168,10 +164,11 @@ class AudioCaptureManager(
                                     _audioChunkFlow.emit(currentChunk)
                                     totalSpeechChunksSent++
                                 } else {
-                                    _audioChunkFlow.emit(silenceBuffer)
-                                    _audioChunkFlow.emit(silenceBuffer)
                                     isInConfirmedSpeech = false
-                                    Log.d(TAG, "VAD: Speech completed after $totalSpeechChunksSent chunks. Emitted trailing silence to trigger Gemini translation.")
+                                    consecutiveSilenceChunks = 0
+                                    totalSpeechChunksSent = 0
+                                    Log.d(TAG, "VAD: Natural pause detected. Signalling turn complete.")
+                                    _soloSegmentCompleteFlow.emit(Unit)
                                 }
                             } else {
                                 if (preSpeechRingBuffer.size >= 5) preSpeechRingBuffer.removeFirst()
@@ -198,31 +195,24 @@ class AudioCaptureManager(
         } catch (e: Exception) {}
 
         try {
-            echoCanceler?.release()
-            echoCanceler = null
-            noiseSuppressor?.release()
-            noiseSuppressor = null
-
+            echoCanceler?.release(); echoCanceler = null
+            noiseSuppressor?.release(); noiseSuppressor = null
             audioRecord?.apply {
-                if (state == AudioRecord.STATE_INITIALIZED) {
-                    stop()
-                }
+                if (state == AudioRecord.STATE_INITIALIZED) stop()
                 release()
             }
             audioRecord = null
             Log.i(TAG, "AudioRecord capture stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping AudioRecord", e)
-        }
+        } catch (e: Exception) { Log.e(TAG, "Error stopping AudioRecord", e) }
     }
 
     private fun calculateRms(buffer: ByteArray, length: Int): Double {
         var sum = 0.0
-        val sampleCount = length / 2
         for (i in 0 until length step 2) {
             val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
             sum += sample * sample
         }
+        val sampleCount = length / 2
         return if (sampleCount > 0) sqrt(sum / sampleCount) else 0.0
     }
 }
