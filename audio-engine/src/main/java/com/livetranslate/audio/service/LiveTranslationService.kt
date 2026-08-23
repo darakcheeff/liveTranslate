@@ -27,6 +27,18 @@ import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+
+data class PhraseTask(
+    val index: Int,
+    val audioPcm: ByteArray
+)
+
+data class PhraseResult(
+    val index: Int,
+    val audioChunks: List<ByteArray>,
+    val transcriptText: String
+)
 
 class LiveTranslationService : Service() {
 
@@ -61,13 +73,18 @@ class LiveTranslationService : Service() {
     private val _compositeSubtitleFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val subtitleFlow: SharedFlow<String> = _compositeSubtitleFlow.asSharedFlow()
 
+    private val channelA = Channel<PhraseTask>(capacity = Channel.UNLIMITED)
+    private val channelB = Channel<PhraseTask>(capacity = Channel.UNLIMITED)
+    private val readyResultsMap = ConcurrentHashMap<Int, PhraseResult>()
+    private var phraseCounter = 0
+
     inner class LocalBinder : Binder() {
         val service: LiveTranslationService get() = this@LiveTranslationService
     }
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Service onCreate (Twin-Engine Pipelined)")
+        Log.i(TAG, "Service onCreate (Twin-Engine with Ordered Sequencer)")
         prefsManager = EncryptedPreferencesManager(this)
         audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager(this)
@@ -87,6 +104,7 @@ class LiveTranslationService : Service() {
 
         createNotificationChannel()
         observeStreams()
+        startOrderedSequencer()
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -120,7 +138,7 @@ class LiveTranslationService : Service() {
     fun startTranslation(mode: TranslationMode) {
         activeMode = mode
         val config = prefsManager.loadConfig()
-        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name} (Twin Engine)")
+        Log.i(TAG, "startTranslation with ${config.apiKeys.size} API keys, mode=${mode.name} (Twin Engine Ordered)")
         clientA.updateConfig(config)
         clientB.updateConfig(config)
 
@@ -135,6 +153,8 @@ class LiveTranslationService : Service() {
 
         currentSessionId = sessionId
         currentSessionTranscript.clear()
+        readyResultsMap.clear()
+        phraseCounter = 0
 
         val historyItem = HistoryItem(
             id = sessionId,
@@ -192,16 +212,28 @@ class LiveTranslationService : Service() {
         audioCapture.startCapture(activeMode)
     }
 
-    private val channelA = Channel<ByteArray>(capacity = Channel.UNLIMITED)
-    private val channelB = Channel<ByteArray>(capacity = Channel.UNLIMITED)
-    private var phraseCounter = 0
-
     private fun observeStreams() {
-        // Direct DIALOGUE mode streaming
+        // Direct DIALOGUE mode streaming to Client A
         serviceScope.launch {
             audioCapture.audioChunkFlow.collect { pcmChunk ->
                 if (activeMode == TranslationMode.DIALOGUE) {
                     clientA.sendAudioChunk(pcmChunk)
+                }
+            }
+        }
+
+        // Direct DIALOGUE audio playback and subtitles
+        serviceScope.launch {
+            clientA.incomingAudioFlow.collect { pcmChunk ->
+                if (activeMode == TranslationMode.DIALOGUE) {
+                    audioPlayback.enqueueAudioChunk(pcmChunk)
+                }
+            }
+        }
+        serviceScope.launch {
+            clientA.subtitleFlow.collect { text ->
+                if (activeMode == TranslationMode.DIALOGUE) {
+                    handleSubtitleText(text)
                 }
             }
         }
@@ -211,51 +243,32 @@ class LiveTranslationService : Service() {
             audioCapture.completedPhraseFlow.collect { phrasePcm ->
                 if (activeMode == TranslationMode.SOLO) {
                     val index = phraseCounter++
+                    val task = PhraseTask(index, phrasePcm)
                     if (index % 2 == 0) {
-                        Log.i(TAG, "Dispatcher: Dispatching Phrase #$index (${phrasePcm.size} bytes) -> Channel A")
-                        channelA.trySend(phrasePcm)
+                        Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker A")
+                        channelA.trySend(task)
                     } else {
-                        Log.i(TAG, "Dispatcher: Dispatching Phrase #$index (${phrasePcm.size} bytes) -> Channel B")
-                        channelB.trySend(phrasePcm)
+                        Log.i(TAG, "Dispatcher: Phrase #$index (${phrasePcm.size} bytes) -> Worker B")
+                        channelB.trySend(task)
                     }
                 }
             }
         }
 
-        // Twin Worker A
+        // Worker A
         serviceScope.launch(Dispatchers.IO) {
-            for (phrasePcm in channelA) {
+            for (task in channelA) {
                 if (activeMode != TranslationMode.SOLO) continue
-                processPhraseWithClient(clientA, "Worker-A", phrasePcm)
+                processPhraseWithClient(clientA, "Worker-A", task)
             }
         }
 
-        // Twin Worker B
+        // Worker B
         serviceScope.launch(Dispatchers.IO) {
-            for (phrasePcm in channelB) {
+            for (task in channelB) {
                 if (activeMode != TranslationMode.SOLO) continue
-                processPhraseWithClient(clientB, "Worker-B", phrasePcm)
+                processPhraseWithClient(clientB, "Worker-B", task)
             }
-        }
-
-        // Playback audio collectors
-        serviceScope.launch {
-            clientA.incomingAudioFlow.collect { pcmChunk ->
-                audioPlayback.enqueueAudioChunk(pcmChunk)
-            }
-        }
-        serviceScope.launch {
-            clientB.incomingAudioFlow.collect { pcmChunk ->
-                audioPlayback.enqueueAudioChunk(pcmChunk)
-            }
-        }
-
-        // Subtitle collectors
-        serviceScope.launch {
-            clientA.subtitleFlow.collect { text -> handleSubtitleText(text) }
-        }
-        serviceScope.launch {
-            clientB.subtitleFlow.collect { text -> handleSubtitleText(text) }
         }
 
         // Interrupted signals
@@ -264,19 +277,33 @@ class LiveTranslationService : Service() {
                 if (activeMode == TranslationMode.DIALOGUE) audioPlayback.flushAndInterrupt()
             }
         }
-        serviceScope.launch {
-            clientB.interruptedFlow.collect {
-                if (activeMode == TranslationMode.DIALOGUE) audioPlayback.flushAndInterrupt()
-            }
-        }
     }
 
     private suspend fun processPhraseWithClient(
         client: GeminiLiveWebSocketClient,
         workerName: String,
-        phrasePcm: ByteArray
+        task: PhraseTask
     ) {
-        Log.i(TAG, "$workerName: Processing phrase (${phrasePcm.size} bytes) -> sending to Gemini")
+        val phraseIndex = task.index
+        val phrasePcm = task.audioPcm
+        Log.i(TAG, "$workerName: Processing Phrase #$phraseIndex (${phrasePcm.size} bytes)")
+
+        val collectedAudio = Collections.synchronizedList(mutableListOf<ByteArray>())
+        val collectedText = StringBuilder()
+
+        val audioCollector = serviceScope.launch {
+            client.incomingAudioFlow.collect { chunk ->
+                collectedAudio.add(chunk)
+            }
+        }
+        val subtitleCollector = serviceScope.launch {
+            client.subtitleFlow.collect { text ->
+                if (text.isNotBlank()) {
+                    collectedText.append(text).append(" ")
+                }
+            }
+        }
+
         client.sendActivityStart()
 
         val chunkSize = 3200
@@ -290,9 +317,36 @@ class LiveTranslationService : Service() {
         }
 
         client.sendActivityEnd()
-        Log.d(TAG, "$workerName: Awaiting turn completion...")
-        client.waitForTurnComplete(timeoutMs = 20000)
-        Log.i(TAG, "$workerName: Turn complete! Ready for next phrase.")
+        Log.d(TAG, "$workerName: Awaiting Phrase #$phraseIndex turn completion...")
+        client.waitForTurnComplete(timeoutMs = 25000)
+
+        audioCollector.cancel()
+        subtitleCollector.cancel()
+
+        val result = PhraseResult(phraseIndex, ArrayList(collectedAudio), collectedText.toString().trim())
+        readyResultsMap[phraseIndex] = result
+        Log.i(TAG, "$workerName: Phrase #$phraseIndex READY! (${collectedAudio.size} audio chunks, text='${result.transcriptText}')")
+    }
+
+    private fun startOrderedSequencer() {
+        serviceScope.launch(Dispatchers.IO) {
+            var nextIndex = 0
+            while (isActive) {
+                val result = readyResultsMap.remove(nextIndex)
+                if (result != null) {
+                    Log.i(TAG, "Sequencer: >>> Playing Phrase #${result.index} (${result.audioChunks.size} chunks) to audio output <<<")
+                    for (chunk in result.audioChunks) {
+                        audioPlayback.enqueueAudioChunk(chunk)
+                    }
+                    if (result.transcriptText.isNotBlank()) {
+                        handleSubtitleText(result.transcriptText)
+                    }
+                    nextIndex++
+                } else {
+                    delay(20)
+                }
+            }
+        }
     }
 
     private fun handleSubtitleText(text: String) {

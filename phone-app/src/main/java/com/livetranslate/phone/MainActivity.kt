@@ -139,10 +139,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHeaderInfo() {
         val config = prefs.loadConfig()
-        val ourLang = Language.findByCode(config.ourLanguage).name
-        val opponentLang = Language.findByCode(config.opponentLanguage).name
-        binding.tvOurLanguage.text = ourLang
-        binding.tvOpponentLanguage.text = opponentLang
+        val ourLang = Language.findByCode(config.ourLanguage)
+        val opponentLang = Language.findByCode(config.opponentLanguage)
+
+        binding.tvOurLanguagePrimary.text = ourLang.nativeName
+        binding.tvOurLanguageSecondary.text = if (ourLang.nativeName != ourLang.englishName) ourLang.englishName else ourLang.name
+
+        binding.tvOpponentLanguagePrimary.text = opponentLang.nativeName
+        binding.tvOpponentLanguageSecondary.text = if (opponentLang.nativeName != opponentLang.englishName) opponentLang.englishName else opponentLang.name
     }
 
     private fun startTranslation(mode: TranslationMode) {

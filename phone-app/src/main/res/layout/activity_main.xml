@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -39,52 +40,98 @@
             style="@style/Widget.MaterialComponents.Button.TextButton" />
     </LinearLayout>
 
-    <!-- Language Selector Card with Swap Button -->
-    <LinearLayout
+    <!-- Language Selector Card with Highlighted Swap Button -->
+    <com.google.android.material.card.MaterialCardView
         android:id="@+id/panelLanguages"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:background="@color/surface"
-        android:paddingVertical="10dp"
-        android:paddingHorizontal="16dp"
-        android:orientation="horizontal"
-        android:gravity="center">
+        app:cardBackgroundColor="@color/surface"
+        app:cardCornerRadius="14dp"
+        app:cardElevation="2dp"
+        app:strokeColor="@color/surface_variant"
+        app:strokeWidth="1dp">
 
-        <TextView
-            android:id="@+id/tvOurLanguage"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:text="Русский"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:maxLines="1" />
+            android:paddingVertical="12dp"
+            android:paddingHorizontal="14dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
-        <ImageButton
-            android:id="@+id/btnSwapLanguages"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginHorizontal="12dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@drawable/ic_swap"
-            android:tint="@color/accent"
-            android:contentDescription="Поменять языки местами" />
+            <!-- Left Language (Our side) -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvOpponentLanguage"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:text="English"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:maxLines="1" />
-    </LinearLayout>
+                <TextView
+                    android:id="@+id/tvOurLanguagePrimary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Русский"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:maxLines="1" />
+
+                <TextView
+                    android:id="@+id/tvOurLanguageSecondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Russian"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:maxLines="1" />
+            </LinearLayout>
+
+            <!-- Prominent Visual Swap Button for Foreign Interlocutors -->
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/btnSwapLanguages"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="8dp"
+                android:contentDescription="Поменять языки местами"
+                app:backgroundTint="@color/primary"
+                app:fabCustomSize="48dp"
+                app:maxImageSize="24dp"
+                app:tint="@android:color/white"
+                android:src="@drawable/ic_swap" />
+
+            <!-- Right Language (Opponent side) -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvOpponentLanguagePrimary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="English"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:maxLines="1" />
+
+                <TextView
+                    android:id="@+id/tvOpponentLanguageSecondary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="Английский"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:maxLines="1" />
+            </LinearLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
 
     <!-- Status Banner -->
     <TextView
@@ -99,75 +146,73 @@
         android:textColor="@color/status_green"
         android:textSize="14sp" />
 
-    <!-- Waveform Visualizer & Subtitles Box -->
-    <FrameLayout
+    <!-- Subtitle / Translation Real-Time Display -->
+    <ScrollView
+        android:id="@+id/scrollSubtitles"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="12dp"
         android:background="@color/surface"
-        android:padding="12dp">
+        android:padding="16dp"
+        android:fillViewport="true">
 
-        <com.livetranslate.phone.ui.WaveformVisualizerView
-            android:id="@+id/waveformVisualizer"
+        <TextView
+            android:id="@+id/tvSubtitles"
             android:layout_width="match_parent"
-            android:layout_height="120dp"
-            android:layout_gravity="center" />
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
+            android:lineSpacingExtra="6dp"
+            android:hint="Здесь появится живой перевод речи..."
+            android:textColorHint="@color/text_secondary" />
+    </ScrollView>
 
-        <ScrollView
-            android:id="@+id/scrollSubtitles"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:fillViewport="true">
+    <!-- Live Audio Waveform Visualizer -->
+    <com.livetranslate.phone.ui.WaveformVisualizerView
+        android:id="@+id/waveformVisualizer"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:layout_marginVertical="12dp" />
 
-            <TextView
-                android:id="@+id/tvSubtitles"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp"
-                android:lineSpacingExtra="4dp" />
-        </ScrollView>
-    </FrameLayout>
-
-    <!-- Action Buttons Panel -->
+    <!-- Mode Selector / Control Buttons -->
     <LinearLayout
         android:id="@+id/panelIdleButtons"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:layout_marginTop="12dp">
+        android:orientation="vertical">
 
         <Button
             android:id="@+id/btnSoloMode"
             android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:text="@string/solo_mode_btn"
+            android:layout_height="56dp"
+            android:text="🎧 Односторонний (Шепот)"
             android:textSize="16sp"
-            android:textAllCaps="false"
+            android:textStyle="bold"
             android:backgroundTint="@color/primary" />
 
         <Button
             android:id="@+id/btnDialogueMode"
             android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:layout_marginTop="10dp"
-            android:text="@string/dialogue_mode_btn"
+            android:layout_height="56dp"
+            android:layout_marginTop="8dp"
+            android:text="🗣 Двусторонний (Диалог)"
             android:textSize="16sp"
-            android:textAllCaps="false"
-            android:backgroundTint="@color/accent" />
+            android:textStyle="bold"
+            android:backgroundTint="@color/surface"
+            android:textColor="@color/text_primary" />
     </LinearLayout>
 
-    <!-- Stop Button (Visible during active session) -->
+    <!-- Stop Button (Visible during active translation) -->
     <Button
         android:id="@+id/btnStop"
         android:layout_width="match_parent"
-        android:layout_height="68dp"
-        android:layout_marginTop="12dp"
-        android:text="@string/stop_btn"
-        android:textSize="18sp"
+        android:layout_height="56dp"
+        android:text="■ Остановить перевод"
+        android:textSize="16sp"
         android:textStyle="bold"
-        android:visibility="gone"
-        android:backgroundTint="@color/stop_red" />
+        android:backgroundTint="@color/stop_red"
+        android:textColor="@android:color/white"
+        android:visibility="gone" />
 
 </LinearLayout>
