@@ -5,7 +5,6 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.PlaybackParams
-import android.os.Build
 import android.util.Log
 import com.livetranslate.audio.capture.WavFileWriter
 import com.livetranslate.core.model.TranslationMode
@@ -32,11 +31,12 @@ class AudioPlaybackManager(
     private val isPlaying = AtomicBoolean(false)
     private val audioQueue = ConcurrentLinkedQueue<ByteArray>()
     private var wavFileWriterRaf: RandomAccessFile? = null
+    private var sessionWavFileWriterRaf: RandomAccessFile? = null
     private var currentPlaybackSpeed = 1.0f
 
     var onPlaybackActiveChanged: ((Boolean) -> Unit)? = null
 
-    fun initialize(mode: TranslationMode): Boolean {
+    fun initialize(mode: TranslationMode, sessionRecordFile: File? = null): Boolean {
         release()
 
         val attributes = AudioAttributes.Builder()
@@ -61,7 +61,7 @@ class AudioPlaybackManager(
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            audioTrack?.setVolume(0.0f) // Muted per user directive (headphones disconnected)
+            audioTrack?.setVolume(1.0f) // Audio playback enabled for headphones
             audioTrack?.play()
             isPlaying.set(true)
             currentPlaybackSpeed = 1.0f
@@ -74,6 +74,16 @@ class AudioPlaybackManager(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Could not initialize output WAV writer", e)
+            }
+
+            sessionRecordFile?.let { sFile ->
+                try {
+                    sFile.parentFile?.mkdirs()
+                    sessionWavFileWriterRaf = WavFileWriter.createWavFile(sFile, SAMPLE_RATE, 1)
+                    Log.i(TAG, "Dumping session recording WAV to: ${sFile.absolutePath}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not initialize session WAV writer", e)
+                }
             }
 
             Log.i(TAG, "AudioTrack initialized with JitterBuffer ($JITTER_BUFFER_MIN_CHUNKS chunks) in mode: ${mode.name}")
@@ -90,6 +100,9 @@ class AudioPlaybackManager(
         audioQueue.offer(boostedChunk)
 
         wavFileWriterRaf?.let { raf ->
+            WavFileWriter.appendPcmData(raf, boostedChunk)
+        }
+        sessionWavFileWriterRaf?.let { raf ->
             WavFileWriter.appendPcmData(raf, boostedChunk)
         }
     }
@@ -180,6 +193,13 @@ class AudioPlaybackManager(
             wavFileWriterRaf?.let { raf ->
                 WavFileWriter.finalizeWavFile(raf, SAMPLE_RATE, 1)
                 wavFileWriterRaf = null
+            }
+        } catch (e: Exception) {}
+
+        try {
+            sessionWavFileWriterRaf?.let { raf ->
+                WavFileWriter.finalizeWavFile(raf, SAMPLE_RATE, 1)
+                sessionWavFileWriterRaf = null
             }
         } catch (e: Exception) {}
 

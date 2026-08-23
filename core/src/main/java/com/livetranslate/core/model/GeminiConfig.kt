@@ -20,7 +20,7 @@ data class GeminiConfig(
     val opponentLanguage: String = "en",
     val selectedVoice: VoiceName = VoiceName.PUCK,
     val showSubtitles: Boolean = true,
-    val saveHistory: Boolean = false,
+    val saveHistory: Boolean = true,
     val preferredModels: List<String> = DEFAULT_MODELS
 ) {
     companion object {
@@ -43,10 +43,12 @@ data class GeminiConfig(
 @Serializable
 data class HistoryItem(
     val id: String,
+    val title: String = "",
     val timestamp: Long,
-    val mode: TranslationMode,
-    val sourceLang: String,
-    val targetLang: String,
-    val originalText: String,
-    val translatedText: String
+    val mode: TranslationMode = TranslationMode.SOLO,
+    val sourceLang: String = "en",
+    val targetLang: String = "ru",
+    val originalText: String = "",
+    val translatedText: String = "",
+    val audioFilePath: String? = null
 )

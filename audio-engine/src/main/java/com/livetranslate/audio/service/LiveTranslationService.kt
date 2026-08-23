@@ -1,14 +1,11 @@
 package com.livetranslate.audio.service
 
-import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
-import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.livetranslate.audio.capture.AudioCaptureManager
@@ -26,67 +23,66 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
-import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.*
 
 class LiveTranslationService : Service() {
 
     companion object {
         private const val TAG = "LiveTranslationService"
+        private const val NOTIFICATION_CHANNEL_ID = "live_translation_channel"
+        private const val NOTIFICATION_ID = 1001
+
         const val ACTION_START = "com.livetranslate.action.START"
         const val ACTION_STOP = "com.livetranslate.action.STOP"
-        const val ACTION_INJECT_TEST = "com.livetranslate.action.INJECT_TEST"
-        const val EXTRA_MODE = "extra_mode"
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "live_translation_channel"
+        const val ACTION_INJECT_TEST = "com.livetranslate.action.TEST_PCM"
+        const val EXTRA_MODE = "mode"
     }
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private lateinit var prefsManager: EncryptedPreferencesManager
-    private lateinit var webSocketClient: GeminiLiveWebSocketClient
     private lateinit var audioCapture: AudioCaptureManager
     private lateinit var audioPlayback: AudioPlaybackManager
     private lateinit var audioFocus: AudioFocusManager
-    private val modelDiscovery = GeminiModelDiscovery()
+    private lateinit var webSocketClient: GeminiLiveWebSocketClient
+    private lateinit var modelDiscovery: GeminiModelDiscovery
 
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
-    private var activeMode: TranslationMode = TranslationMode.SOLO
+    private var activeMode = TranslationMode.DIALOGUE
+    private var currentSessionId: String? = null
+    private var currentSessionTranscript = StringBuilder()
 
     inner class LocalBinder : Binder() {
-        fun getService(): LiveTranslationService = this@LiveTranslationService
+        val service: LiveTranslationService get() = this@LiveTranslationService
     }
-
-    override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Service onCreate")
         prefsManager = EncryptedPreferencesManager(this)
-        val config = prefsManager.loadConfig()
-
-        webSocketClient = GeminiLiveWebSocketClient(config)
         audioCapture = AudioCaptureManager(this)
         audioPlayback = AudioPlaybackManager(this)
-
-        audioFocus = AudioFocusManager(
-            context = this,
-            onFocusLost = { pauseTranslation() },
-            onFocusGained = { resumeTranslation() }
-        )
+        audioFocus = AudioFocusManager(this) { hasFocus ->
+            if (hasFocus) resumeTranslation() else pauseTranslation()
+        }
+        val initialConfig = prefsManager.loadConfig()
+        webSocketClient = GeminiLiveWebSocketClient(initialConfig)
+        modelDiscovery = GeminiModelDiscovery()
 
         audioPlayback.onPlaybackActiveChanged = { isPlaying ->
             audioCapture.setDucking(isPlaying)
         }
 
+        createNotificationChannel()
         observeStreams()
-        acquireLocks()
     }
 
+    override fun onBind(intent: Intent?): IBinder = binder
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-        val modeStr = intent?.getStringExtra(EXTRA_MODE)
+        val action = intent?.action ?: return START_NOT_STICKY
+        val modeStr = intent.getStringExtra(EXTRA_MODE)
         val mode = if (modeStr != null) {
             try { TranslationMode.valueOf(modeStr) } catch (e: Exception) { TranslationMode.SOLO }
         } else {
@@ -118,7 +114,30 @@ class LiveTranslationService : Service() {
 
         startForegroundNotification(mode)
         audioFocus.requestAudioFocus()
-        audioPlayback.initialize(mode)
+
+        val sessionId = UUID.randomUUID().toString()
+        val sdf = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+        val dateStr = sdf.format(Date())
+        val recordingsDir = File(filesDir, "recordings").apply { mkdirs() }
+        val sFile = File(recordingsDir, "session_${System.currentTimeMillis()}.wav")
+
+        currentSessionId = sessionId
+        currentSessionTranscript.clear()
+
+        val historyItem = HistoryItem(
+            id = sessionId,
+            title = "Перевод $dateStr",
+            timestamp = System.currentTimeMillis(),
+            mode = mode,
+            sourceLang = config.opponentLanguage,
+            targetLang = config.ourLanguage,
+            originalText = "",
+            translatedText = "",
+            audioFilePath = sFile.absolutePath
+        )
+        prefsManager.appendHistoryItem(historyItem)
+
+        audioPlayback.initialize(mode, sFile)
         audioCapture.startCapture(mode)
 
         serviceScope.launch {
@@ -190,7 +209,7 @@ class LiveTranslationService : Service() {
                     val chunk = phrasePcm.copyOfRange(offset, offset + len)
                     webSocketClient.sendAudioChunk(chunk)
                     offset += len
-                    delay(5)
+                    delay(2)
                 }
 
                 webSocketClient.sendActivityEnd()
@@ -219,19 +238,17 @@ class LiveTranslationService : Service() {
 
         serviceScope.launch {
             webSocketClient.subtitleFlow.collect { text ->
-                val config = prefsManager.loadConfig()
-                if (config.saveHistory && text.isNotBlank()) {
-                    prefsManager.appendHistoryItem(
-                        HistoryItem(
-                            id = UUID.randomUUID().toString(),
-                            timestamp = System.currentTimeMillis(),
-                            mode = activeMode,
-                            sourceLang = config.ourLanguage,
-                            targetLang = config.opponentLanguage,
-                            originalText = "",
-                            translatedText = text
-                        )
-                    )
+                if (text.isNotBlank()) {
+                    currentSessionTranscript.append(text).append(" ")
+                    currentSessionId?.let { sId ->
+                        val historyList = prefsManager.loadHistory()
+                        val item = historyList.find { it.id == sId }
+                        if (item != null) {
+                            prefsManager.updateHistoryItem(
+                                item.copy(translatedText = currentSessionTranscript.toString().trim())
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -266,52 +283,44 @@ class LiveTranslationService : Service() {
         }
     }
 
-    private fun startForegroundNotification(mode: TranslationMode) {
-        createNotificationChannel()
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Live Translate: ${mode.displayName}")
-            .setContentText("Идет синхронный перевод...")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-        startForeground(NOTIFICATION_ID, notification)
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Синхронный перевод",
+                NOTIFICATION_CHANNEL_ID,
+                "Служба живого перевода",
                 NotificationManager.IMPORTANCE_LOW
-            )
+            ).apply {
+                description = "Фоновый синхронный перевод речи"
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }
 
-    @SuppressLint("WakelockTimeout")
-    private fun acquireLocks() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LiveTranslate::WakeLock").apply {
-            acquire()
+    private fun startForegroundNotification(mode: TranslationMode) {
+        val stopIntent = Intent(this, LiveTranslationService::class.java).apply {
+            action = ACTION_STOP
         }
-        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LiveTranslate::WifiLock").apply {
-            acquire()
-        }
-    }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-    private fun releaseLocks() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wifiLock?.let { if (it.isHeld) it.release() }
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Live Translate")
+            .setContentText("Идет перевод (${if (mode == TranslationMode.SOLO) "Шепот" else "Диалог"})")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .addAction(android.R.drawable.ic_media_pause, "Остановить", stopPendingIntent)
+            .setOngoing(true)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "Service onDestroy")
         stopTranslation()
-        releaseLocks()
         serviceScope.cancel()
     }
 }

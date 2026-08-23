@@ -1,48 +1,67 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="@color/background"
     android:padding="16dp">
 
+    <!-- Top Action Bar -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
-        <Button
-            android:id="@+id/btnExportHistory"
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_revert"
+            app:tint="@color/text_primary"
+            android:contentDescription="Назад" />
+
+        <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/export_btn"
-            android:backgroundTint="@color/primary" />
+            android:layout_marginStart="8dp"
+            android:text="История переводов"
+            android:textColor="@color/text_primary"
+            android:textSize="20sp"
+            android:textStyle="bold" />
 
         <Button
-            android:id="@+id/btnClearHistory"
+            android:id="@+id/btnClearAllHistory"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
             android:text="Очистить"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:textColor="@color/stop_red" />
     </LinearLayout>
 
-    <ScrollView
+    <!-- Empty State -->
+    <TextView
+        android:id="@+id/tvEmptyHistory"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="12dp"
-        android:background="@color/surface"
-        android:padding="12dp">
+        android:gravity="center"
+        android:text="История переводов пуста\nЗдесь будут сохранены аудиозаписи и текст ваших переводов."
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp"
+        android:lineSpacingExtra="4dp"
+        android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/tvHistoryContent"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            android:lineSpacingExtra="4dp" />
-    </ScrollView>
+    <!-- History List -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerHistory"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:clipToPadding="false"
+        android:paddingBottom="16dp" />
 </LinearLayout>

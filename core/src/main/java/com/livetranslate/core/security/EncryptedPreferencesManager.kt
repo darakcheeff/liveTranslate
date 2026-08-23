@@ -6,11 +6,11 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.livetranslate.core.model.GeminiConfig
 import com.livetranslate.core.model.HistoryItem
-import com.livetranslate.core.model.VoiceName
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.File
 
-class EncryptedPreferencesManager(context: Context) {
+class EncryptedPreferencesManager(private val context: Context) {
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -31,7 +31,6 @@ class EncryptedPreferencesManager(context: Context) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Exception) {
-            // Fallback for edge cases where Android Keystore has temporary issues
             context.getSharedPreferences(PREFS_FILE_NAME + "_fallback", Context.MODE_PRIVATE)
         }
     }
@@ -66,15 +65,45 @@ class EncryptedPreferencesManager(context: Context) {
 
     fun appendHistoryItem(item: HistoryItem) {
         val current = loadHistory().toMutableList()
+        current.removeAll { it.id == item.id }
         current.add(0, item)
-        // Keep last 1000 items max
         if (current.size > 1000) {
-            current.removeAt(current.size - 1)
+            val removed = current.removeAt(current.size - 1)
+            removed.audioFilePath?.let { path ->
+                try { File(path).delete() } catch (e: Exception) {}
+            }
         }
         saveHistory(current)
     }
 
+    fun updateHistoryItem(item: HistoryItem) {
+        val current = loadHistory().toMutableList()
+        val index = current.indexOfFirst { it.id == item.id }
+        if (index >= 0) {
+            current[index] = item
+            saveHistory(current)
+        }
+    }
+
+    fun deleteHistoryItem(id: String) {
+        val current = loadHistory().toMutableList()
+        val item = current.find { it.id == id }
+        if (item != null) {
+            item.audioFilePath?.let { path ->
+                try { File(path).delete() } catch (e: Exception) {}
+            }
+            current.removeAll { it.id == id }
+            saveHistory(current)
+        }
+    }
+
     fun clearHistory() {
+        val current = loadHistory()
+        current.forEach { item ->
+            item.audioFilePath?.let { path ->
+                try { File(path).delete() } catch (e: Exception) {}
+            }
+        }
         sharedPreferences.edit().remove(KEY_HISTORY).apply()
     }
 
