@@ -34,7 +34,7 @@ class WatchMainActivity : AppCompatActivity() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as? LiveTranslationService.LocalBinder
-            translationService = localBinder?.getService()
+            translationService = localBinder?.service
             isBound = true
             observeService()
         }
